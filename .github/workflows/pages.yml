@@ -1,0 +1,51 @@
+name: Deploy to GitHub Pages
+
+# リポジトリの Settings → Pages で「GitHub Actions」を選ぶと、main への push ごとに公開します。
+# ランキングサーバーを別に用意した場合は、Settings → Secrets and variables → Actions → Variables に
+# VITE_API_BASE（例: https://api.example.com）を登録してください。未登録ならランキングは「未接続」表示です。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Build
+        env:
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}/
+          VITE_PUBLIC_GAME_URL: ${{ steps.pages.outputs.base_url }}/
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+        run: npx vite build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

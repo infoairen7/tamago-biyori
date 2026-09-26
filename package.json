@@ -1,0 +1,35 @@
+{
+  "name": "tamago-biyori",
+  "private": true,
+  "version": "0.1.0",
+  "description": "たまご日和 — 主観視点の3D目玉焼きゲーム（仮タイトル）",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "node --disable-warning=ExperimentalWarning --test \"tests/**/*.test.ts\"",
+    "simulate": "node scripts/simulate.ts",
+    "server": "node --disable-warning=ExperimentalWarning server/index.ts",
+    "start": "node --disable-warning=ExperimentalWarning scripts/start.ts",
+    "optimize-assets": "node scripts/optimize-assets.mjs"
+  },
+  "dependencies": {
+    "react": "~19.2.6",
+    "react-dom": "~19.2.6",
+    "three": "~0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "~0.186.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.1"
+  }
+}

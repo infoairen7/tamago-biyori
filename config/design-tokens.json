@@ -1,0 +1,54 @@
+{
+  "colors": {
+    "background": "#FFF8EB",
+    "surface": "#FFFFFF",
+    "text": "#28392D",
+    "muted": "#657062",
+    "primary": "#244C3A",
+    "primaryText": "#FFFFFF",
+    "yolk": "#F5B42A",
+    "yolkText": "#28392D",
+    "accentSoft": "#EAF0E5",
+    "border": "#D9DDCE",
+    "danger": "#A33D2C",
+    "focus": "#315FA1"
+  },
+  "fontFamily": "system-ui, -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif",
+  "fontSizes": {
+    "title": 32,
+    "screenTitle": 24,
+    "body": 16,
+    "caption": 14,
+    "score": 64
+  },
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64
+  ],
+  "radius": {
+    "button": 16,
+    "card": 20,
+    "pill": 999
+  },
+  "minimumTouchTarget": 48,
+  "primaryButtonHeight": 56,
+  "layout": {
+    "referenceMobileWidth": 390,
+    "referenceMobileHeight": 844,
+    "desktopMaxWidth": 1280,
+    "desktopControlWidth": 320
+  },
+  "motion": {
+    "buttonMs": 120,
+    "screenMs": 220,
+    "crackMs": 800,
+    "plateMs": 800,
+    "respectReducedMotion": true
+  }
+}

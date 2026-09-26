@@ -1,0 +1,87 @@
+{
+  "scoringVersion": "1.0.0",
+  "fixedStepSeconds": 0.016666666666666666,
+  "maxCookingSeconds": 90,
+  "initialHeat": 0.25,
+  "heatTargets": {
+    "off": 0,
+    "low": 0.38,
+    "medium": 0.65,
+    "high": 1.0
+  },
+  "thermalTimeConstant": 3,
+  "model": {
+    "whiteRate": 0.055,
+    "whiteLidBoost": 0.18,
+    "yolkRate": 0.019,
+    "yolkLidBoost": 0.7,
+    "browningWhiteThreshold": 0.55,
+    "browningRate": 0.02,
+    "browningHeatFloor": 0.35,
+    "browningHeatSpan": 0.65,
+    "browningLidReduction": 0.4,
+    "burnWhiteThreshold": 0.6,
+    "burnRate": 0.028,
+    "burnHeatFloor": 0.78,
+    "burnHeatSpan": 0.22
+  },
+  "eggs": [
+    {
+      "id": "white",
+      "name": "白い卵",
+      "gameSpeed": 1,
+      "visualScale": 1,
+      "image": "assets/egg_white.png"
+    },
+    {
+      "id": "brown",
+      "name": "赤い卵",
+      "gameSpeed": 1,
+      "visualScale": 1,
+      "image": "assets/egg_brown.png"
+    },
+    {
+      "id": "quail",
+      "name": "うずら卵",
+      "gameSpeed": 1.25,
+      "visualScale": 0.6,
+      "image": "assets/egg_quail.png"
+    }
+  ],
+  "targets": [
+    {
+      "id": "soft",
+      "label": "とろり",
+      "targetY": 0.38
+    },
+    {
+      "id": "medium",
+      "label": "ほどよく",
+      "targetY": 0.62
+    },
+    {
+      "id": "firm",
+      "label": "しっかり",
+      "targetY": 0.86
+    }
+  ],
+  "score": {
+    "weights": [
+      40,
+      40,
+      20
+    ],
+    "whiteIdeal": 0.9,
+    "yolkTolerance": 0.06,
+    "yolkFalloff": 0.3,
+    "brownTarget": 0.22,
+    "brownTolerance": 0.12,
+    "brownFalloff": 0.6,
+    "burnPenalty": 0.9,
+    "rawWhiteThreshold": 0.75,
+    "rawWhiteCap": 39,
+    "burnThreshold": 0.5,
+    "burnCap": 49,
+    "brownRequiresWhiteFit": true
+  }
+}

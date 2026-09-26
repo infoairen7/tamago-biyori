@@ -1,0 +1,25 @@
+{
+  "enabled": false,
+  "companyName": "",
+  "logoUrl": "",
+  "disclosure": "PR・提供",
+  "headline": "今度は、本物のたまごで。",
+  "description": "",
+  "product": {
+    "id": "",
+    "name": "",
+    "imageUrl": "",
+    "approvedDescription": "",
+    "destinationUrl": ""
+  },
+  "campaign": {
+    "id": "",
+    "startAt": null,
+    "endAt": null
+  },
+  "ctaLabel": "この卵を見てみる",
+  "shareHashtag": "たまご日和",
+  "publicGameUrl": "",
+  "privacyUrl": "",
+  "termsUrl": ""
+}
