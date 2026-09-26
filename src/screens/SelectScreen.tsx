@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import { GAME_CONFIG, type EggId, type TargetId } from '../../shared/config.ts';
+import { useEffect, useState, type ReactNode } from 'react';
+import { GAME_CONFIG, getEdge, getOil, getOilAmount, type EdgeId, type EggId, type OilAmountId, type OilId, type TargetId } from '../../shared/config.ts';
 import type { Selection } from '../appTypes.ts';
 import type { Sponsor } from '../sponsor.ts';
-import { getLocalBest } from '../game/storage.ts';
+import { FEATURE_UNLOCK_AT, getLocalBest, getRecipeBook, type Feature, type Unlocks } from '../game/storage.ts';
 import { AppHeader, Button, Icon, IconButton } from '../components/ui.tsx';
 
 const EGG_TEXT: Record<EggId, string> = {
@@ -11,8 +11,48 @@ const EGG_TEXT: Record<EggId, string> = {
   quail: '小さな一個を、手ぎわよく。',
 };
 
+export const FEATURE_LABEL: Record<Feature, string> = {
+  edge: '縁の焼き目',
+  oilAmount: '油の量',
+  water: '差し水',
+  oilType: '油の種類',
+};
+
+function Segments<T extends string>({
+  name,
+  legend,
+  options,
+  value,
+  onChange,
+  note,
+}: {
+  name: string;
+  legend: string;
+  options: { id: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  note?: ReactNode;
+}) {
+  return (
+    <fieldset className="option-group">
+      <legend className="h4">{legend}</legend>
+      <div className="segments">
+        {options.map((o) => (
+          <label key={o.id} className={`segment ${value === o.id ? 'active' : ''}`}>
+            <input type="radio" name={name} value={o.id} checked={value === o.id} onChange={() => onChange(o.id)} className="sr-only" />
+            {o.label}
+          </label>
+        ))}
+      </div>
+      {note && <p className="option-note">{note}</p>}
+    </fieldset>
+  );
+}
+
 export function SelectScreen({
   initial,
+  unlocks,
+  plays,
   sponsor,
   starting,
   muted,
@@ -21,6 +61,8 @@ export function SelectScreen({
   onStart,
 }: {
   initial: Selection;
+  unlocks: Unlocks;
+  plays: number;
   sponsor: Sponsor | null;
   starting: boolean;
   muted: boolean;
@@ -30,12 +72,22 @@ export function SelectScreen({
 }) {
   const [eggId, setEggId] = useState<EggId>(initial.eggId);
   const [targetId, setTargetId] = useState<TargetId>(initial.targetId);
-  const best = getLocalBest(eggId, targetId);
+  const [edgeId, setEdgeId] = useState<EdgeId>(initial.edgeId);
+  const [oilId, setOilId] = useState<OilId>(initial.oilId);
+  const [oilAmountId, setOilAmountId] = useState<OilAmountId>(initial.oilAmountId);
+  const best = getLocalBest({ eggId, targetId, edgeId });
+  const book = unlocks.edge ? getRecipeBook(eggId) : null;
   const base = import.meta.env.BASE_URL;
 
   useEffect(() => {
     document.getElementById('select-title')?.focus({ preventScroll: true });
   }, []);
+
+  // まだ使えないこだわりと、あと何皿で使えるか
+  const locked = (Object.keys(FEATURE_UNLOCK_AT) as Feature[]).filter((f) => !unlocks[f]);
+  const nextAt = locked.length ? Math.min(...locked.map((f) => FEATURE_UNLOCK_AT[f])) : null;
+  const nextFeatures = locked.filter((f) => FEATURE_UNLOCK_AT[f] === nextAt);
+  const edge = getEdge(edgeId);
 
   return (
     <div className="screen select-screen">
@@ -75,20 +127,100 @@ export function SelectScreen({
               </label>
             ))}
           </fieldset>
+          {book && (
+            <section className="recipe-book" aria-labelledby="book-title">
+              <h3 className="h4" id="book-title">
+                レシピ帳 <span className="tiny">（{GAME_CONFIG.eggs.find((e) => e.id === eggId)?.name}・この端末の自己ベスト）</span>
+              </h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <span className="sr-only">黄身＼縁</span>
+                    </th>
+                    {GAME_CONFIG.edgeTargets.map((e) => (
+                      <th key={e.id} scope="col">
+                        縁 {e.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {GAME_CONFIG.targets.map((t) => (
+                    <tr key={t.id}>
+                      <th scope="row">{t.label}</th>
+                      {GAME_CONFIG.edgeTargets.map((e) => {
+                        const b = book[`${t.id}:${e.id}`];
+                        const current = t.id === targetId && e.id === edgeId;
+                        return (
+                          <td key={e.id}>
+                            <button
+                              type="button"
+                              className={`book-cell ${current ? 'current' : ''} ${b && b.score >= 90 ? 'great' : ''}`}
+                              aria-pressed={current}
+                              aria-label={`黄身${t.label}・縁${e.label}：${b ? `${b.score}点` : '記録なし'}`}
+                              onClick={() => {
+                                setTargetId(t.id);
+                                setEdgeId(e.id);
+                              }}
+                            >
+                              {b ? b.score : '—'}
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
         </div>
         <div className="select-col">
-          <fieldset className="targets">
-            <legend className="h4">黄身の仕上がり</legend>
-            <div className="segments">
-              {GAME_CONFIG.targets.map((t) => (
-                <label key={t.id} className={`segment ${targetId === t.id ? 'active' : ''}`}>
-                  <input type="radio" name="target" value={t.id} checked={targetId === t.id} onChange={() => setTargetId(t.id)} className="sr-only" />
-                  {t.label}
-                </label>
-              ))}
+          <Segments
+            name="target"
+            legend="黄身の仕上がり"
+            options={GAME_CONFIG.targets}
+            value={targetId}
+            onChange={setTargetId}
+          />
+          {unlocks.edge && (
+            <Segments name="edge" legend="縁の焼き目" options={GAME_CONFIG.edgeTargets} value={edgeId} onChange={setEdgeId} note={edge.description} />
+          )}
+          {(unlocks.oilType || unlocks.oilAmount) && (
+            <div className="prep">
+              <span className="eyebrow">02 / 下ごしらえ</span>
+              {unlocks.oilType && (
+                <Segments
+                  name="oil"
+                  legend="油"
+                  options={GAME_CONFIG.oils.map((o) => ({ id: o.id, label: o.name }))}
+                  value={oilId}
+                  onChange={setOilId}
+                  note={getOil(oilId).description}
+                />
+              )}
+              {unlocks.oilAmount && (
+                <Segments
+                  name="oil-amount"
+                  legend="油の量"
+                  options={GAME_CONFIG.oilAmounts.map((o) => ({ id: o.id, label: o.name }))}
+                  value={oilAmountId}
+                  onChange={setOilAmountId}
+                  note={getOilAmount(oilAmountId).description}
+                />
+              )}
             </div>
-          </fieldset>
-          <p className="tiny">どの仕上がりでも、100点を目指せます。</p>
+          )}
+          <p className="tiny">どの組み合わせでも、100点を目指せます。</p>
+          {nextAt !== null && (
+            <p className="unlock-teaser">
+              <Icon name="drop" size={16} />
+              <span>
+                あと{Math.max(1, nextAt - plays)}皿焼くと「{nextFeatures.map((f) => FEATURE_LABEL[f]).join('」と「')}」が使えるようになります。
+              </span>
+            </p>
+          )}
           <p className="best-line" aria-live="polite">
             {best ? (
               <>
@@ -116,7 +248,7 @@ export function SelectScreen({
         </div>
       </div>
       <div className="sticky-footer">
-        <Button onClick={() => onStart({ eggId, targetId })} loading={starting}>
+        <Button onClick={() => onStart({ eggId, targetId, edgeId, oilId, oilAmountId })} loading={starting}>
           {starting ? '準備中…' : 'この卵で焼く'} {!starting && <Icon name="arrow" />}
         </Button>
       </div>

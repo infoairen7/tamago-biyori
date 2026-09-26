@@ -2,10 +2,10 @@
 // フライパン・卵・殻・ふた・皿・キッチンは全てプロシージャル形状で、外部モデルなしで起動します。
 // 見た目は GameModel の値（T/W/Y/B/D）と run seed の形だけから決まります。
 import * as THREE from 'three';
-import { GAME_CONFIG, type EggConfig } from '../../../shared/config.ts';
+import { GAME_CONFIG, type EggConfig, type OilAmountConfig, type OilConfig } from '../../../shared/config.ts';
 import type { FinalCook } from '../../../shared/model.ts';
 import { makeEggShape, whiteRadiusAt, type EggShape } from '../../../shared/shape.ts';
-import { WhiteSurface, paintShell, shellColors, smoothstep, yolkLook } from '../eggPainter.ts';
+import { OIL_LOOK, WhiteSurface, paintShell, shellColors, smoothstep, yolkLook } from '../eggPainter.ts';
 import type { QualityLevel, RenderView, RendererCallbacks, SceneRenderer } from '../types.ts';
 import { DROP_MS, PLATING_MS } from '../../game/session.ts';
 import {
@@ -31,6 +31,12 @@ const PLATE_POS = new THREE.Vector3(-37, COUNTER_Y, 2);
 const YOLK_DOME = 0.74;
 const PLATE_TOP = COUNTER_Y + 0.42;
 const HANDLE_ANGLE = (26 * Math.PI) / 180;
+/** 油の量ごとの見た目（油だまりの濃さ・広さ・泡の大きさ） */
+const OIL_AMOUNT_LOOK = {
+  less: { opacity: 0.1, radius: 1.06, bubbles: 0.6 },
+  normal: { opacity: 0.2, radius: 1.17, bubbles: 1 },
+  more: { opacity: 0.36, radius: 1.32, bubbles: 1.45 },
+} as const;
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
@@ -140,6 +146,12 @@ export class ThreeRenderer implements SceneRenderer {
   private whiteTex: THREE.CanvasTexture | null = null;
   private bubbleMesh: THREE.InstancedMesh;
   private oilMesh: THREE.InstancedMesh;
+  private oilMat: THREE.MeshStandardMaterial;
+  private oilPool: THREE.Mesh;
+  private oilPoolMat: THREE.MeshStandardMaterial;
+  private oilKey = '';
+  private oilLook: { opacity: number; radius: number; bubbles: number } = OIL_AMOUNT_LOOK.normal;
+  private lastSteamS = 0;
   private shape: EggShape | null = null;
   private runKey = '';
 
@@ -258,6 +270,7 @@ export class ThreeRenderer implements SceneRenderer {
     const bubbleGeom = new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
     const bubbleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.04, transparent: true, opacity: 0.5, envMapIntensity: 1.6, depthWrite: false });
     const oilMat = new THREE.MeshStandardMaterial({ color: 0xe2b467, roughness: 0.08, transparent: true, opacity: 0.6, envMapIntensity: 1.4, depthWrite: false });
+    this.oilMat = oilMat;
     this.bubbleMesh = new THREE.InstancedMesh(bubbleGeom, bubbleMat, 14);
     this.oilMesh = new THREE.InstancedMesh(bubbleGeom, oilMat, 28);
     this.bubbleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -267,6 +280,24 @@ export class ThreeRenderer implements SceneRenderer {
     this.eggGroup.add(this.bubbleMesh, this.oilMesh);
     this.disposables.push(bubbleGeom, bubbleMat, oilMat);
     scene.add(this.eggGroup);
+
+    // フライパンの油だまり（量と種類で濃さ・広さ・色が変わる）
+    this.oilPoolMat = new THREE.MeshStandardMaterial({
+      color: 0xd9a94f,
+      roughness: 0.05,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.2,
+      envMapIntensity: 1.7,
+      depthWrite: false,
+    });
+    const poolGeom = new THREE.CircleGeometry(1, 56);
+    this.oilPool = new THREE.Mesh(poolGeom, this.oilPoolMat);
+    this.oilPool.rotation.x = -Math.PI / 2;
+    this.oilPool.position.y = 0.008;
+    this.oilPool.renderOrder = 1;
+    scene.add(this.oilPool);
+    this.disposables.push(poolGeom, this.oilPoolMat);
 
     // 殻（全体と割れた2つの半分）
     this.shellCanvas = document.createElement('canvas');
@@ -633,6 +664,17 @@ export class ThreeRenderer implements SceneRenderer {
     this.shellKey = '';
   }
 
+  private setOil(oil: OilConfig, amount: OilAmountConfig) {
+    const key = `${oil.id}:${amount.id}`;
+    if (key === this.oilKey) return;
+    this.oilKey = key;
+    const look = OIL_LOOK[oil.id];
+    this.oilLook = OIL_AMOUNT_LOOK[amount.id];
+    this.oilPoolMat.color.setRGB(look.pool[0] / 255, look.pool[1] / 255, look.pool[2] / 255, THREE.SRGBColorSpace);
+    this.oilMat.color.setRGB(look.bubble[0] / 255, look.bubble[1] / 255, look.bubble[2] / 255, THREE.SRGBColorSpace);
+    this.surface?.setTone(oil.id);
+  }
+
   private updateShellTexture(egg: EggConfig, seed: number, cracked: boolean) {
     const key = `${this.shellEggKey}:${cracked}`;
     if (key === this.shellKey) return;
@@ -642,14 +684,14 @@ export class ThreeRenderer implements SceneRenderer {
     this.shellInnerMat.color.set(shellColors(egg.id).inner);
   }
 
-  private applyCookLook(W: number, Y: number, B: number, D: number, force: boolean, now: number) {
+  private applyCookLook(W: number, Y: number, B: number, D: number, force: boolean, now: number, wet = 0, F = 0) {
     if (this.surface && this.whiteTex && (force || now - this.lastPaint > 0.12)) {
-      if (this.surface.update(W, B, D, force)) this.whiteTex.needsUpdate = true;
+      if (this.surface.update(W, B, D, force, wet)) this.whiteTex.needsUpdate = true;
       this.lastPaint = now;
     }
-    this.whiteMat.roughness = 0.14 + 0.46 * smoothstep(0.1, 0.9, W);
-    this.sheenMat.opacity = 0.9 * (1 - smoothstep(0.15, 0.85, W));
-    const look = yolkLook(Y);
+    this.whiteMat.roughness = (0.14 + 0.46 * smoothstep(0.1, 0.9, W)) * (1 - 0.4 * wet);
+    this.sheenMat.opacity = 0.9 * Math.max(1 - smoothstep(0.15, 0.85, W), 0.5 * wet);
+    const look = yolkLook(Y, F);
     this.yolkMat.color.setRGB(look.color[0] / 255, look.color[1] / 255, look.color[2] / 255, THREE.SRGBColorSpace);
     this.yolkMat.emissive.copy(this.yolkMat.color).multiplyScalar(0.06);
     this.yolkMat.roughness = look.roughness;
@@ -660,11 +702,12 @@ export class ThreeRenderer implements SceneRenderer {
     }
   }
 
-  private updateBubbles(active: boolean, T: number, W: number, t: number) {
+  private updateBubbles(active: boolean, T: number, W: number, t: number, steam = 0) {
     const shape = this.shape;
     if (!shape) return;
     const whiteAct = active ? smoothstep(0.42, 0.62, T) * (1 - smoothstep(0.55, 0.92, W)) : 0;
-    const oilAct = active ? smoothstep(0.45, 0.72, T) : 0;
+    // 油が多いほど縁の泡が大きく、差し水の直後は水が沸いて泡立つ
+    const oilAct = active ? Math.max(smoothstep(0.45, 0.72, T) * this.oilLook.bubbles, steam * 1.1) : 0;
     const d = this.dummy;
     for (let i = 0; i < this.bubbleMesh.count; i++) {
       const b = shape.bubbles[i % shape.bubbles.length];
@@ -685,7 +728,7 @@ export class ThreeRenderer implements SceneRenderer {
       const theta = b.theta + (i >= shape.bubbles.length ? 0.4 : 0);
       const ph = (t * (1.1 + b.size) + b.phase + i * 0.13) % 1;
       const s = Math.sin(Math.PI * ph) * oilAct * (0.1 + b.size * 0.18);
-      const r = (1.0 + 0.11 * b.r) * whiteRadiusAt(shape, theta);
+      const r = (1.0 + 0.11 * b.r * this.oilLook.radius) * whiteRadiusAt(shape, theta);
       d.position.set(Math.cos(theta) * r, 0.02, Math.sin(theta) * r);
       d.scale.set(Math.max(s, 0.0001), Math.max(s * 0.7, 0.0001), Math.max(s, 0.0001));
       d.updateMatrix();
@@ -695,27 +738,34 @@ export class ThreeRenderer implements SceneRenderer {
     this.oilMesh.visible = oilAct > 0.01;
   }
 
-  private updateSteam(t: number, dt: number, amount: number, lidClosed: boolean, reducedMotion: boolean) {
+  private updateSteam(t: number, dt: number, amount: number, lidClosed: boolean, reducedMotion: boolean, burst = 0) {
     const max = reducedMotion ? 5 : this.quality === 'high' ? 18 : 8;
     const interval = (lidClosed ? 0.8 : 0.22) / Math.max(0.15, amount);
-    if (amount > 0.04 && t - this.lastSteamAt > interval) {
-      const alive = this.steam.filter((p) => p.alive).length;
-      const slot = this.steam.find((p) => !p.alive);
-      if (slot && alive < max) {
-        this.lastSteamAt = t;
-        const a = Math.random() * Math.PI * 2;
-        const r = lidClosed ? PAN_R * 0.98 : Math.random() * 4.5 * (this.shape?.scale ?? 1);
-        slot.alive = true;
-        slot.born = t;
-        slot.life = (reducedMotion ? 3.6 : 2.4) + Math.random() * 1.2;
-        slot.x = Math.cos(a) * r;
-        slot.z = Math.sin(a) * r;
-        slot.drift = (Math.random() - 0.5) * 2;
-        slot.size = 2.8 + Math.random() * 2.4;
-        slot.fromLid = lidClosed;
-        slot.sprite.visible = true;
-      }
-    }
+    // 差し水の瞬間は、まとめて湯気を立てる
+    for (let i = 0; i < burst; i++) this.spawnSteam(t, lidClosed, reducedMotion, max, 1.4);
+    if (amount > 0.04 && t - this.lastSteamAt > interval) this.spawnSteam(t, lidClosed, reducedMotion, max, 1);
+    this.animateSteam(t, dt, amount, reducedMotion);
+  }
+
+  private spawnSteam(t: number, lidClosed: boolean, reducedMotion: boolean, max: number, sizeBoost: number) {
+    const alive = this.steam.filter((p) => p.alive).length;
+    const slot = this.steam.find((p) => !p.alive);
+    if (!slot || alive >= max) return;
+    this.lastSteamAt = t;
+    const a = Math.random() * Math.PI * 2;
+    const r = lidClosed ? PAN_R * 0.98 : Math.random() * 4.5 * (this.shape?.scale ?? 1);
+    slot.alive = true;
+    slot.born = t;
+    slot.life = (reducedMotion ? 3.6 : 2.4) + Math.random() * 1.2;
+    slot.x = Math.cos(a) * r;
+    slot.z = Math.sin(a) * r;
+    slot.drift = (Math.random() - 0.5) * 2;
+    slot.size = (2.8 + Math.random() * 2.4) * sizeBoost;
+    slot.fromLid = lidClosed;
+    slot.sprite.visible = true;
+  }
+
+  private animateSteam(t: number, dt: number, amount: number, reducedMotion: boolean) {
     for (const p of this.steam) {
       if (!p.alive) continue;
       const u = (t - p.born) / p.life;
@@ -728,7 +778,7 @@ export class ThreeRenderer implements SceneRenderer {
       p.sprite.position.set(p.x + Math.sin(u * 3 + p.drift) * 1.3 + p.drift * u * 1.5, y, p.z - u * 1.5);
       const sc = p.size + u * 5;
       p.sprite.scale.set(sc, sc, sc);
-      (p.sprite.material as THREE.SpriteMaterial).opacity = Math.sin(Math.PI * u) * 0.34 * Math.min(1, amount * 1.3);
+      (p.sprite.material as THREE.SpriteMaterial).opacity = Math.sin(Math.PI * u) * 0.34 * Math.min(1.2, Math.max(0.5, amount * 1.3));
     }
   }
 
@@ -806,6 +856,7 @@ export class ThreeRenderer implements SceneRenderer {
   private renderInner(view: RenderView) {
     const start = performance.now();
     this.ensureRun(view.egg, view.shape);
+    this.setOil(view.oil, view.amount);
     const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, view.time - this.lastTime));
     this.lastTime = view.time;
     if (!view.paused) this.animClock += dt;
@@ -874,7 +925,7 @@ export class ThreeRenderer implements SceneRenderer {
         this.eggGroup.position.set(target.x * e, target.y * e + (rm ? 0 : Math.sin(Math.PI * e) * 7), target.z * e);
         this.eggGroup.scale.set(1, 1, 1);
         this.eggGroup.rotation.y = e * 0.3;
-        this.applyCookLook(cook.W, cook.Y, cook.B, cook.D, phase === 'done', t);
+        this.applyCookLook(cook.W, cook.Y, cook.B, cook.D, phase === 'done', t, cook.wet, cook.F);
         // 黄身のゆれ（固まるほど小さく）
         if (!rm && phase === 'cooking') {
           const wob = 0.012 * (1 - cook.Y) * cook.T * Math.sin(t * 13);
@@ -884,7 +935,12 @@ export class ThreeRenderer implements SceneRenderer {
         }
       }
     }
-    this.updateBubbles(phase === 'cooking' && !view.paused && !rm, cook.T, cook.W, t);
+    this.updateBubbles(phase === 'cooking' && !view.paused && !rm, cook.T, cook.W, t, cook.S);
+    // 油だまり（白身の外側にのぞく）
+    this.oilPool.visible = phase !== 'idle';
+    const poolR = shape.whiteRadius * this.oilLook.radius;
+    this.oilPool.scale.set(poolR, poolR, 1);
+    this.oilPoolMat.opacity = this.oilLook.opacity * (phase === 'crackReady' || phase === 'cracked' ? 0.7 : 1);
 
     // ふた
     const lidTarget = phase === 'cooking' && cook.lidClosed ? 1 : 0;
@@ -894,15 +950,19 @@ export class ThreeRenderer implements SceneRenderer {
     if (this.lidGroup.visible) {
       const ease = easeOut(this.lidAnim);
       this.lidGroup.position.y = (1 - ease) * 16;
-      const fog = cook.lidClosed ? smoothstep(0.3, 1, cook.T) * 0.12 : 0;
+      // 蒸し焼き中はガラスが少し曇る（卵は見える程度まで）
+      const fog = cook.lidClosed ? Math.min(0.2, smoothstep(0.3, 1, cook.T) * 0.12 + cook.S * 0.16) : 0;
       this.lidGlassMat.opacity = (0.14 + fog) * ease;
     }
 
     // 湯気
     if (phase === 'cooking' && !view.paused) {
-      const amount = smoothstep(0.35, 0.75, cook.T) * (0.35 + 0.65 * Math.min(1, cook.W * 1.4));
-      this.updateSteam(t, dt, amount, cook.lidClosed, rm);
+      const amount = smoothstep(0.35, 0.75, cook.T) * (0.35 + 0.65 * Math.min(1, cook.W * 1.4)) + cook.S * 1.1;
+      const burst = cook.S > 0.9 && this.lastSteamS < 0.5 ? (rm ? 2 : 6) : 0;
+      this.lastSteamS = cook.S;
+      this.updateSteam(t, dt, amount, cook.lidClosed, rm, burst);
     } else if (phase !== 'cooking') {
+      this.lastSteamS = 0;
       this.hideSteam();
     }
 
@@ -916,9 +976,10 @@ export class ThreeRenderer implements SceneRenderer {
     if (this.frameTimes.length > 90) this.frameTimes.shift();
   }
 
-  snapshotPlate(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number): HTMLCanvasElement {
+  snapshotPlate(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number, oil?: OilConfig): HTMLCanvasElement {
     if (this.lost || this.fatal) throw new Error('3D renderer unavailable');
     this.ensureRun(egg, shape);
+    if (oil) this.surface?.setTone(oil.id);
     const prev = {
       pos: this.eggGroup.position.clone(),
       rotY: this.eggGroup.rotation.y,
@@ -938,7 +999,7 @@ export class ThreeRenderer implements SceneRenderer {
     this.tapRing.visible = false;
     this.hideSteam();
     this.bubbleMesh.visible = this.oilMesh.visible = false;
-    this.applyCookLook(cook.W, cook.Y, cook.B, cook.D, true, this.animClock);
+    this.applyCookLook(cook.W, cook.Y, cook.B, cook.D, true, this.animClock, cook.wet ?? 0, cook.F ?? 0);
 
     const cam = this.camera.clone();
     cam.aspect = width / height;

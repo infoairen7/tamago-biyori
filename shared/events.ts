@@ -1,21 +1,23 @@
 // 操作ログ（整数stepで記録）と、その検証・再生。
 // ブラウザは操作時にログを記録し、サーバーは同じ関数で初期状態から再生して点数を確定します。
-import { GAME_CONFIG, MAX_STEPS, isHeatLevel, type GameConfig, type HeatLevel } from './config.ts';
-import { initialCookState, stepCook, type CookState } from './model.ts';
+import { GAME_CONFIG, MAX_STEPS, isHeatLevel, type CookParams, type GameConfig, type HeatLevel } from './config.ts';
+import { addWater, initialCookState, stepCook, type CookState } from './model.ts';
 
 export type LidValue = 'open' | 'closed';
 
 export type CookEvent =
   | { seq: number; step: number; action: 'heat'; value: HeatLevel }
-  | { seq: number; step: number; action: 'lid'; value: LidValue };
+  | { seq: number; step: number; action: 'lid'; value: LidValue }
+  | { seq: number; step: number; action: 'water'; value: 'add' };
 
 export const MAX_EVENTS = 500;
 /** 重複除去前に受け付ける最大件数（通信量の上限）。 */
 export const MAX_RAW_EVENTS = 2000;
 
-export function applyEvent(s: CookState, e: CookEvent): void {
+export function applyEvent(s: CookState, e: CookEvent, cfg: GameConfig = GAME_CONFIG): void {
   if (e.action === 'heat') s.heat = e.value;
-  else s.lidClosed = e.value === 'closed';
+  else if (e.action === 'lid') s.lidClosed = e.value === 'closed';
+  else addWater(s, cfg);
 }
 
 /**
@@ -23,20 +25,20 @@ export function applyEvent(s: CookState, e: CookEvent): void {
  * stepがnのイベントは「nステップ完了後、次のステップを計算する前」に適用します。
  * 同じstepに複数ある場合はseq順です（呼び出し側でseq順に並んでいる前提）。
  */
-export function replay(events: readonly CookEvent[], stopStep: number, eggSpeed: number, cfg: GameConfig = GAME_CONFIG): CookState {
+export function replay(events: readonly CookEvent[], stopStep: number, params: CookParams, cfg: GameConfig = GAME_CONFIG): CookState {
   const s = initialCookState(cfg);
   let i = 0;
   const end = Math.min(stopStep, MAX_STEPS);
   while (s.step < end) {
     while (i < events.length && events[i].step <= s.step) {
-      applyEvent(s, events[i]);
+      applyEvent(s, events[i], cfg);
       i++;
     }
-    stepCook(s, eggSpeed, cfg);
+    stepCook(s, params, cfg);
   }
   // stopStepちょうどのイベントは点数に影響しないが、状態表示の整合のため適用しておく
   while (i < events.length && events[i].step <= s.step) {
-    applyEvent(s, events[i]);
+    applyEvent(s, events[i], cfg);
     i++;
   }
   return s;
@@ -52,6 +54,7 @@ export type LogValidationError =
   | 'bad_action'
   | 'bad_value'
   | 'too_many_events'
+  | 'water_twice'
   | 'bad_stop_step'
   | 'stop_before_last_event';
 
@@ -61,7 +64,7 @@ const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInt
 
 /**
  * 外部から受け取ったログを検証し、同じ値の連続（状態が変わらない操作）を除去して返します。
- * seqは0からの連番、stepは0〜5400の整数で非減少、actionはheat/lidのみ。
+ * seqは0からの連番、stepは0〜5400の整数で非減少、actionはheat/lid/water（差し水は1回まで）。
  */
 export function validateLog(input: unknown, stopStepInput: unknown): ValidatedLog {
   if (!Array.isArray(input)) return { ok: false, error: 'not_array' };
@@ -70,6 +73,7 @@ export function validateLog(input: unknown, stopStepInput: unknown): ValidatedLo
 
   const parsed: CookEvent[] = [];
   let prevStep = 0;
+  let water = 0;
   for (let i = 0; i < input.length; i++) {
     const e = input[i] as Record<string, unknown> | null;
     if (!e || typeof e !== 'object' || Array.isArray(e)) return { ok: false, error: 'bad_event' };
@@ -85,6 +89,10 @@ export function validateLog(input: unknown, stopStepInput: unknown): ValidatedLo
     } else if (e.action === 'lid') {
       if (e.value !== 'open' && e.value !== 'closed') return { ok: false, error: 'bad_value' };
       parsed.push({ seq: e.seq, step: e.step, action: 'lid', value: e.value });
+    } else if (e.action === 'water') {
+      if (e.value !== 'add') return { ok: false, error: 'bad_value' };
+      if (++water > 1) return { ok: false, error: 'water_twice' };
+      parsed.push({ seq: e.seq, step: e.step, action: 'water', value: 'add' });
     } else {
       return { ok: false, error: 'bad_action' };
     }
@@ -106,7 +114,7 @@ export function dedupeEvents(events: readonly CookEvent[]): CookEvent[] {
     if (e.action === 'heat') {
       if (e.value === heat) continue;
       heat = e.value;
-    } else {
+    } else if (e.action === 'lid') {
       if (e.value === lid) continue;
       lid = e.value;
     }

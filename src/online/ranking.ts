@@ -1,6 +1,6 @@
 // ランキングAPIのクライアント。VITE_API_BASE が未設定なら「未接続」として扱い、
 // 架空のデータで埋めずに「ランキングに接続できません」を表示します。
-import type { EggId, TargetId } from '../../shared/config.ts';
+import type { EdgeId, EggId, Recipe, TargetId } from '../../shared/config.ts';
 import type { CookEvent } from '../../shared/events.ts';
 import type { LeaderboardResponse, Period, PublishResponse, RunTicket, VerifiedResult } from '../../shared/api-types.ts';
 import { getPlayerToken, savePlayerToken } from '../game/storage.ts';
@@ -95,8 +95,9 @@ export class RankingClient {
     return this.sessionPromise;
   }
 
-  createRun(eggId: EggId, targetId: TargetId, timeoutMs = 2500): Promise<RunTicket> {
-    return this.request<RunTicket>('POST', '/api/runs', { eggId, targetId }, 'required', timeoutMs);
+  createRun(recipe: Recipe, timeoutMs = 2500): Promise<RunTicket> {
+    const { eggId, targetId, edgeId, oilId, oilAmountId } = recipe;
+    return this.request<RunTicket>('POST', '/api/runs', { eggId, targetId, edgeId, oilId, oilAmountId }, 'required', timeoutMs);
   }
 
   finish(runId: string, events: CookEvent[], stopStep: number): Promise<VerifiedResult> {
@@ -107,8 +108,8 @@ export class RankingClient {
     return this.request<PublishResponse>('POST', `/api/results/${encodeURIComponent(resultId)}/publish`, { displayName });
   }
 
-  leaderboard(eggId: EggId, targetId: TargetId, period: Period, version: string): Promise<LeaderboardResponse> {
-    const q = new URLSearchParams({ egg: eggId, target: targetId, period, version });
+  leaderboard(eggId: EggId, targetId: TargetId, edgeId: EdgeId, period: Period, version: string): Promise<LeaderboardResponse> {
+    const q = new URLSearchParams({ egg: eggId, target: targetId, edge: edgeId, period, version });
     return this.request<LeaderboardResponse>('GET', `/api/leaderboard?${q}`, undefined, 'optional');
   }
 }

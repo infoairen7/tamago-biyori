@@ -1,6 +1,7 @@
 // 結果：自分の目玉焼き、点数、称号、3項目、一言。再挑戦・X・画像保存/共有・ランキング登録・PR。
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { displayBasePoints, displayBurnPenalty } from '../../shared/model.ts';
+import { displayBasePoints, displayBurnPenalty, displayWetPenalty } from '../../shared/model.ts';
+import { STEPS_PER_SECOND } from '../../shared/config.ts';
 import { normalizeDisplayName, NAME_MAX_GRAPHEMES } from '../../shared/name.ts';
 import { formatJstDateTime } from '../../shared/period.ts';
 import type { PublishResponse } from '../../shared/api-types.ts';
@@ -11,10 +12,18 @@ import { feedbackCause, feedbackComment, scoreTitle } from '../game/feedback.ts'
 import { audio } from '../game/audio.ts';
 import { track } from '../game/analytics.ts';
 import { getDisplayName, saveDisplayName } from '../game/storage.ts';
+import { FEATURE_LABEL } from './SelectScreen.tsx';
 import { buildCopyText, buildHashtags, buildShareText, buildXIntentUrl } from '../share/shareText.ts';
 import { buildResultImage, canShareFile, isLowMemoryDevice, triggerDownload, type ResultImage } from '../share/resultImage.ts';
 import { ranking, RankingError } from '../online/ranking.ts';
 import { AppHeader, Button, Dialog, Icon, IconButton } from '../components/ui.tsx';
+
+const UNLOCK_TEXT: Record<string, string> = {
+  edge: '縁を「しろく」「ほんのり」「カリッと」から選べます。油の量で、焼き色の付き方が変わります。',
+  oilAmount: '油の量で、縁の焼き色と焦げやすさが変わります。',
+  water: '調理中に1回だけ水を差せます。ふたと合わせると蒸し焼きになり、黄身が早く固まります。差すのが早すぎると白身が水っぽくなります。',
+  oilType: 'サラダ油・バター・ごま油。色づきやすさと焦げやすさが違います。',
+};
 
 type ImageState = { kind: 'preparing' } | { kind: 'ready'; image: ResultImage } | { kind: 'error' };
 
@@ -61,14 +70,24 @@ export function ResultScreen({
   onSettings: () => void;
   onTitle: () => void;
 }) {
-  const { final, egg, target, shape } = result;
+  const { final, egg, target, edge, oil, amount, shape } = result;
+  const unlocks = result.run.unlocks;
   const b = final.breakdown;
   const score = b.score;
   const title = scoreTitle(score);
   const parts = displayBasePoints(b);
   const penalty = displayBurnPenalty(b);
-  const cause = feedbackCause(final.cook, b, target.targetY);
-  const comment = feedbackComment(cause);
+  const wetPenalty = displayWetPenalty(b);
+  const waterStep = final.cook.waterStep;
+  const cause = feedbackCause(final.cook, b, { targetY: target.targetY, edge });
+  const comment = feedbackComment(cause, { targetY: target.targetY, edge, oil, amount, waterUsed: waterStep !== null, unlocks });
+  // 縁の目標を選べる状態で焼いたときだけ、目標に縁を含めて表示する
+  const goalLabel = unlocks.edge ? `${target.label} × 縁${edge.label}` : target.label;
+  const techniqueParts = [
+    unlocks.oilType || unlocks.oilAmount ? `${oil.name}・${amount.name}` : null,
+    waterStep !== null ? `差し水 ${(waterStep / STEPS_PER_SECOND).toFixed(1)}秒` : null,
+    `お皿へ ${(final.stopStep / STEPS_PER_SECOND).toFixed(1)}秒`,
+  ].filter(Boolean);
   const [plateUrl, setPlateUrl] = useState<string>('');
   const [img, setImg] = useState<ImageState>({ kind: 'preparing' });
   const [shownScore, setShownScore] = useState(reducedMotion ? score : 0);
@@ -80,7 +99,7 @@ export function ResultScreen({
 
   const hashtags = useMemo(() => buildHashtags(publicSettings.shareHashtag), [publicSettings.shareHashtag]);
   const publicUrl = (import.meta.env.VITE_PUBLIC_GAME_URL ?? '').trim() || publicSettings.publicGameUrl;
-  const shareText = buildShareText({ score, eggName: egg.name, targetLabel: target.label, title });
+  const shareText = buildShareText({ score, eggName: egg.name, targetLabel: goalLabel, title });
   const verified = online.kind === 'verified' ? online : null;
   const published = verified?.published ?? null;
 
@@ -110,7 +129,7 @@ export function ResultScreen({
   useEffect(() => {
     let url = '';
     let alive = true;
-    const canvas = host.snapshot(final.cook, egg, shape, 800, 540);
+    const canvas = host.snapshot(final.cook, egg, shape, 800, 540, oil);
     void canvasToUrl(canvas).then((u) => {
       if (!alive) {
         if (u.startsWith('blob:')) URL.revokeObjectURL(u);
@@ -123,7 +142,7 @@ export function ResultScreen({
       alive = false;
       if (url.startsWith('blob:')) URL.revokeObjectURL(url);
     };
-  }, [host, final, egg, shape]);
+  }, [host, final, egg, shape, oil]);
 
   // 共有画像（1200×630）を先に用意しておく（タップ直後に共有を呼べるように）
   const rankLine = published?.weekly ? `週間 ${published.weekly.rank}位（${formatJstDateTime(published.fetchedAt)}時点）` : null;
@@ -134,14 +153,14 @@ export function ResultScreen({
     setImg({ kind: 'preparing' });
     (async () => {
       try {
-        const plate = host.snapshot(final.cook, egg, shape, 1050, 800);
+        const plate = host.snapshot(final.cook, egg, shape, 1050, 800, oil);
         const image = await buildResultImage(
           {
             plate,
             score,
             title,
             eggName: egg.name,
-            targetLabel: target.label,
+            targetLabel: goalLabel,
             parts,
             rankLine,
             sponsor: sponsor ? { disclosure: sponsor.disclosure, companyName: sponsor.companyName, logoUrl: sponsor.logoUrl } : null,
@@ -246,11 +265,12 @@ export function ResultScreen({
             {`${score}点。${title}`}
           </p>
           <div className="plate-frame">
-            {plateUrl ? <img className="plate-img" src={plateUrl} alt={`お皿の目玉焼き（${egg.name}、${target.label}、${score}点）`} /> : <div className="plate-img plate-placeholder" />}
+            {plateUrl ? <img className="plate-img" src={plateUrl} alt={`お皿の目玉焼き（${egg.name}、${goalLabel}、${score}点）`} /> : <div className="plate-img plate-placeholder" />}
           </div>
           <div className="resulttag">
-            {egg.name} × {target.label}
+            {egg.name} × {goalLabel}
           </div>
+          <div className="technique-line">{techniqueParts.join('　')}</div>
         </div>
         <div className="result-info">
           <div className="breakdown" role="group" aria-label="3項目の基礎点">
@@ -269,21 +289,31 @@ export function ResultScreen({
               </b>
             </span>
             <span>
-              焼き色
+              焼き目
               <b>
                 {parts.brown}
                 <small>/20</small>
               </b>
             </span>
           </div>
-          {(penalty > 0 || b.cap) && (
+          {(penalty > 0 || wetPenalty > 0 || b.cap) && (
             <p className="adjust">
               基礎点 {parts.total}
               {penalty > 0 && <> → 焦げ −{penalty}</>}
+              {wetPenalty > 0 && <> → 水っぽさ −{wetPenalty}</>}
               {b.cap && <> → {b.cap.kind === 'rawWhite' ? '白身が生のため' : '強い焦げのため'}上限{b.cap.value}点</>} → <b>{score}点</b>
             </p>
           )}
           <p className="resultcomment">{comment}</p>
+          {result.newlyUnlocked.length > 0 && (
+            <div className="unlock-card" role="status">
+              <span className="unlock-badge">NEW</span>
+              <div>
+                <b>次の一皿から「{result.newlyUnlocked.map((f) => FEATURE_LABEL[f]).join('」「')}」が使えます</b>
+                <p>{UNLOCK_TEXT[result.newlyUnlocked[0]]}</p>
+              </div>
+            </div>
+          )}
           {final.reason === 'timeout' && <p className="tiny center">90秒たったので、お皿にうつしました。</p>}
           <p className="best-badge">
             {result.best.isNewBest ? (

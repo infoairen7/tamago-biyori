@@ -1,5 +1,5 @@
 {
-  "scoringVersion": "1.0.0",
+  "scoringVersion": "2.0.0",
   "fixedStepSeconds": 0.016666666666666666,
   "maxCookingSeconds": 90,
   "initialHeat": 0.25,
@@ -17,13 +17,21 @@
     "yolkLidBoost": 0.7,
     "browningWhiteThreshold": 0.55,
     "browningRate": 0.02,
-    "browningHeatFloor": 0.35,
-    "browningHeatSpan": 0.65,
     "browningLidReduction": 0.4,
     "burnWhiteThreshold": 0.6,
     "burnRate": 0.028,
-    "burnHeatFloor": 0.78,
-    "burnHeatSpan": 0.22
+    "burnHeatSpan": 0.22,
+    "steamWhiteBoost": 0.6,
+    "steamYolkBoost": 2.2,
+    "steamOpenFactor": 0.25,
+    "steamBrowningSuppress": 0.9,
+    "steamBurnSuppress": 0.95,
+    "waterCooling": 0.15,
+    "evaporationBase": 0.03,
+    "evaporationHeat": 0.16,
+    "evaporationOpenMultiplier": 2.5,
+    "filmRate": 0.35,
+    "waterEarlyWhite": 0.45
   },
   "eggs": [
     {
@@ -65,6 +73,81 @@
       "targetY": 0.86
     }
   ],
+  "edgeTargets": [
+    {
+      "id": "pale",
+      "label": "しろく",
+      "targetB": 0,
+      "tolerance": 0.07,
+      "falloff": 0.3,
+      "description": "焼き色をつけず、白くやわらかく。"
+    },
+    {
+      "id": "golden",
+      "label": "ほんのり",
+      "targetB": 0.22,
+      "tolerance": 0.12,
+      "falloff": 0.6,
+      "description": "縁にうっすら、きつね色。"
+    },
+    {
+      "id": "crispy",
+      "label": "カリッと",
+      "targetB": 0.45,
+      "tolerance": 0.1,
+      "falloff": 0.4,
+      "description": "縁をこんがり、カリカリに。"
+    }
+  ],
+  "oils": [
+    {
+      "id": "salad",
+      "name": "サラダ油",
+      "browning": 1,
+      "browningHeatFloor": 0.35,
+      "burnHeatFloor": 0.78,
+      "description": "くせがなく、焦げにくい。基本の油。"
+    },
+    {
+      "id": "butter",
+      "name": "バター",
+      "browning": 1.5,
+      "browningHeatFloor": 0.22,
+      "burnHeatFloor": 0.6,
+      "description": "弱めの火でも色づき、香ばしい。中火以上は焦げやすい。"
+    },
+    {
+      "id": "sesame",
+      "name": "ごま油",
+      "browning": 1.2,
+      "browningHeatFloor": 0.32,
+      "burnHeatFloor": 0.7,
+      "description": "香ばしく色づきやすい。強火では焦げに注意。"
+    }
+  ],
+  "oilAmounts": [
+    {
+      "id": "less",
+      "name": "少なめ",
+      "browning": 0.7,
+      "burn": 1.4,
+      "description": "焼き色は控えめ。そのぶん焦げつきやすい。"
+    },
+    {
+      "id": "normal",
+      "name": "ふつう",
+      "browning": 1,
+      "burn": 1,
+      "description": "バランスのよい基本の量。"
+    },
+    {
+      "id": "more",
+      "name": "たっぷり",
+      "browning": 1.5,
+      "burn": 0.7,
+      "description": "揚げ焼きになり、縁がカリカリになりやすい。"
+    }
+  ],
   "score": {
     "weights": [
       40,
@@ -74,14 +157,12 @@
     "whiteIdeal": 0.9,
     "yolkTolerance": 0.06,
     "yolkFalloff": 0.3,
-    "brownTarget": 0.22,
-    "brownTolerance": 0.12,
-    "brownFalloff": 0.6,
     "burnPenalty": 0.9,
     "rawWhiteThreshold": 0.75,
     "rawWhiteCap": 39,
     "burnThreshold": 0.5,
     "burnCap": 49,
-    "brownRequiresWhiteFit": true
+    "brownRequiresWhiteFit": true,
+    "wetPenalty": 0.3
   }
 }

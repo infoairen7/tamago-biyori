@@ -2,7 +2,7 @@
 // 後からオリジナル音源へ差し替える場合は public/audio/ に置き、SOUND_FILES にパスを書きます。
 // 音はユーザー操作（開始ボタンなど）の後にだけ有効化します。音なしでも全機能を使えます。
 
-export type SoundId = 'egg_tap' | 'egg_crack' | 'egg_drop' | 'lid_on' | 'lid_off' | 'plate' | 'result_good' | 'ui';
+export type SoundId = 'egg_tap' | 'egg_crack' | 'egg_drop' | 'lid_on' | 'lid_off' | 'plate' | 'result_good' | 'ui' | 'water';
 
 /** 差し替え用の音源パス（BASE_URLからの相対）。空なら合成音を使います。例: { egg_crack: 'audio/egg_crack.mp3' } */
 export const SOUND_FILES: Partial<Record<SoundId | 'sizzle_loop', string>> = {};
@@ -14,6 +14,7 @@ export class AudioEngine {
   private master: GainNode | null = null;
   private sizzleGain: GainNode | null = null;
   private sizzleFilter: BiquadFilterNode | null = null;
+  private sizzleHp: BiquadFilterNode | null = null;
   private sizzleSrc: AudioBufferSourceNode | null = null;
   private noise: AudioBuffer | null = null;
   private files = new Map<string, AudioBuffer>();
@@ -164,6 +165,12 @@ export class AudioEngine {
         case 'ui':
           this.tone(t, 880, 0.05, 0.035, 'sine');
           break;
+        case 'water':
+          // 差し水：じゅわーっと広がる音（最初は明るく、だんだんこもる）
+          this.noiseBurst(t, 0.12, 700, 1.2, 0.35);
+          this.noiseBurst(t + 0.02, 1.8, 4200, 0.6, 0.5);
+          this.noiseBurst(t + 0.1, 2.4, 2200, 0.8, 0.3);
+          break;
       }
     } catch {
       /* 音は失敗しても無視 */
@@ -202,8 +209,8 @@ export class AudioEngine {
     s.stop(t + dur + 0.02);
   }
 
-  /** 焼ける音（ループ）。level 0〜1、ふたを閉じると少しこもる */
-  setSizzle(level: number, lidClosed: boolean): void {
+  /** 焼ける音（ループ）。level 0〜1、ふたを閉じると少しこもる。steam（差し水の蒸気）があると低めの音が混ざる */
+  setSizzle(level: number, lidClosed: boolean, steam = 0): void {
     const ctx = this.ctx;
     if (!ctx || !this.master || this.failed) return;
     try {
@@ -225,11 +232,14 @@ export class AudioEngine {
         this.sizzleSrc = src;
         this.sizzleGain = g;
         this.sizzleFilter = lp;
+        this.sizzleHp = hp;
       }
       if (this.sizzleGain && this.sizzleFilter) {
         const t = ctx.currentTime;
-        this.sizzleGain.gain.setTargetAtTime(Math.max(0, level) * 0.32, t, 0.25);
+        const st = Math.max(0, Math.min(1, steam));
+        this.sizzleGain.gain.setTargetAtTime(Math.max(0, level) * 0.32 * (1 + 0.8 * st), t, 0.25);
         this.sizzleFilter.frequency.setTargetAtTime(lidClosed ? 2600 : 9000, t, 0.15);
+        this.sizzleHp?.frequency.setTargetAtTime(1800 - 1100 * st, t, 0.2);
       }
     } catch {
       /* noop */
@@ -246,6 +256,7 @@ export class AudioEngine {
     this.sizzleSrc = null;
     this.sizzleGain = null;
     this.sizzleFilter = null;
+    this.sizzleHp = null;
   }
 }
 

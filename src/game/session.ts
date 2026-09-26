@@ -1,7 +1,26 @@
 // 1回のプレイ（卵を割る→調理→お皿へ）を進める描画非依存のドライバー。
 // 描画のフレーム間隔に関係なく、固定ステップ（1/60秒）でモデルを進めます。
-import { GAME_CONFIG, MAX_STEPS, getEgg, getTarget, type EggConfig, type EggId, type HeatLevel, type TargetConfig, type TargetId } from '../../shared/config.ts';
-import { cloneCookState, initialCookState, scoreCook, stepCook, type CookState, type ScoreBreakdown } from '../../shared/model.ts';
+import {
+  GAME_CONFIG,
+  MAX_STEPS,
+  cookParams,
+  getEdge,
+  getEgg,
+  getOil,
+  getOilAmount,
+  getTarget,
+  type CookParams,
+  type EdgeTargetConfig,
+  type EggConfig,
+  type EggId,
+  type HeatLevel,
+  type OilAmountConfig,
+  type OilConfig,
+  type Recipe,
+  type TargetConfig,
+  type TargetId,
+} from '../../shared/config.ts';
+import { addWater, cloneCookState, initialCookState, scoreCook, stepCook, type CookState, type ScoreBreakdown } from '../../shared/model.ts';
 import type { CookEvent } from '../../shared/events.ts';
 import tokens from '../../config/design-tokens.json' with { type: 'json' };
 
@@ -37,8 +56,13 @@ export interface TickOutcome {
 }
 
 export class PlaySession {
+  readonly recipe: Recipe;
   readonly egg: EggConfig;
   readonly target: TargetConfig;
+  readonly edge: EdgeTargetConfig;
+  readonly oil: OilConfig;
+  readonly amount: OilAmountConfig;
+  readonly params: CookParams;
   readonly seed: number;
   phase: PlayPhase = 'crackReady';
   phaseStartedAt: number;
@@ -49,9 +73,14 @@ export class PlaySession {
   private acc = 0;
   private lastTapAt = -Infinity;
 
-  constructor(eggId: EggId, targetId: TargetId, seed: number, now: number) {
-    this.egg = getEgg(eggId);
-    this.target = getTarget(targetId);
+  constructor(recipe: Recipe, seed: number, now: number) {
+    this.recipe = { ...recipe };
+    this.egg = getEgg(recipe.eggId);
+    this.target = getTarget(recipe.targetId);
+    this.edge = getEdge(recipe.edgeId);
+    this.oil = getOil(recipe.oilId);
+    this.amount = getOilAmount(recipe.oilAmountId);
+    this.params = cookParams(recipe);
     this.seed = seed;
     this.phaseStartedAt = now;
     this.cook = initialCookState();
@@ -109,6 +138,18 @@ export class PlaySession {
     return true;
   }
 
+  /** 差し水（1回の調理で1回だけ）。蒸気が立ち、ふたを閉めるとよく効きます。 */
+  addWater(): boolean {
+    if (!this.canOperate || this.cook.waterStep !== null) return false;
+    addWater(this.cook);
+    this.events.push({ seq: this.events.length, step: this.cook.step, action: 'water', value: 'add' });
+    return true;
+  }
+
+  get waterUsed(): boolean {
+    return this.cook.waterStep !== null;
+  }
+
   /** お皿にうつす。モデルを即時固定して採点します（一度だけ）。 */
   plate(now: number): boolean {
     if (!this.canOperate) return false;
@@ -121,7 +162,7 @@ export class PlaySession {
     const cook = cloneCookState(this.cook);
     this.final = {
       cook,
-      breakdown: scoreCook(cook, this.target.targetY),
+      breakdown: scoreCook(cook, this.target.targetY, this.edge),
       stopStep: cook.step,
       events: this.events.map((e) => ({ ...e })),
       reason,
@@ -156,7 +197,7 @@ export class PlaySession {
       this.acc += Math.min(Math.max(realDtSeconds, 0), MAX_FRAME_SECONDS);
       while (this.acc + EPS >= STEP && this.cook.step < MAX_STEPS) {
         this.acc -= STEP;
-        stepCook(this.cook, this.egg.gameSpeed);
+        stepCook(this.cook, this.params);
         out.steps++;
       }
       if (this.cook.step >= MAX_STEPS) {

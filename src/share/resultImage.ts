@@ -144,19 +144,24 @@ export async function buildResultImage(input: ResultImageInput, lowMemory = fals
   c.fillText('点', rx - 6 + sw2 + 8, 330);
 
   // 条件のタグ
-  c.font = `700 24px ${FONT}`;
   const tag = `${input.eggName} × ${input.targetLabel}`;
+  let tagSize = 24;
+  c.font = `700 ${tagSize}px ${FONT}`;
+  while (c.measureText(tag).width > 318 && tagSize > 16) {
+    tagSize -= 1;
+    c.font = `700 ${tagSize}px ${FONT}`;
+  }
   const tw = c.measureText(tag).width;
   c.fillStyle = C.accentSoft;
   roundRectPath(c, rx, 364, tw + 36, 48, 24);
   c.fill();
   c.fillStyle = C.primary;
-  c.fillText(tag, rx + 18, 396);
+  c.fillText(tag, rx + 18, 388 + tagSize / 3);
 
   // 3項目
   c.fillStyle = C.muted;
   c.font = `500 20px ${FONT}`;
-  c.fillText(`白身 ${input.parts.white}/40 ・ 黄身 ${input.parts.yolk}/40 ・ 焼き色 ${input.parts.brown}/20`, rx, 452, 360);
+  c.fillText(`白身 ${input.parts.white}/40 ・ 黄身 ${input.parts.yolk}/40 ・ 焼き目 ${input.parts.brown}/20`, rx, 452, 360);
   if (input.rankLine) {
     c.fillStyle = C.primary;
     c.font = `700 20px ${FONT}`;

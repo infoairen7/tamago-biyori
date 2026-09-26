@@ -4,7 +4,23 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { GAME_CONFIG, STEPS_PER_SECOND, getEgg, getTarget, isEggId, isTargetId, type EggId, type TargetId } from '../shared/config.ts';
+import {
+  GAME_CONFIG,
+  STEPS_PER_SECOND,
+  cookParams,
+  getEdge,
+  getTarget,
+  isEdgeId,
+  isEggId,
+  isOilAmountId,
+  isOilId,
+  isTargetId,
+  type EdgeId,
+  type EggId,
+  type OilAmountId,
+  type OilId,
+  type TargetId,
+} from '../shared/config.ts';
 import { scoreCook } from '../shared/model.ts';
 import { canonicalLog, replay, validateLog } from '../shared/events.ts';
 import { normalizeDisplayName } from '../shared/name.ts';
@@ -94,6 +110,9 @@ interface RunRow {
   player_id: string;
   egg_id: string;
   target_id: string;
+  edge_id: string;
+  oil_id: string;
+  oil_amount_id: string;
   seed: number;
   scoring_version: string;
   started_at: number;
@@ -108,6 +127,11 @@ interface ResultRow {
   player_id: string;
   egg_id: string;
   target_id: string;
+  edge_id: string;
+  oil_id: string;
+  oil_amount_id: string;
+  water_step: number | null;
+  wet: number;
   scoring_version: string;
   w: number;
   y: number;
@@ -128,11 +152,16 @@ function toVerified(r: ResultRow): VerifiedResult {
     runId: r.run_id,
     eggId: r.egg_id as EggId,
     targetId: r.target_id as TargetId,
+    edgeId: r.edge_id as EdgeId,
+    oilId: r.oil_id as OilId,
+    oilAmountId: r.oil_amount_id as OilAmountId,
+    waterStep: r.water_step,
     scoringVersion: r.scoring_version,
     W: r.w,
     Y: r.y,
     B: r.b,
     D: r.d,
+    wet: r.wet,
     score: r.score,
     stopStep: r.stop_step,
     verifiedAt: r.verified_at,
@@ -242,35 +271,39 @@ export function createApp(opts: AppOptions) {
 
   // ---- ランキング計算 ----
 
-  function rankedQuery(version: string, egg: string, target: string, weekStart: number | null) {
+  function rankedQuery(version: string, egg: string, target: string, edge: string, weekStart: number | null) {
     // 参加者ごとの区分内自己ベスト1件 → 競技順位（1,1,3）。並びは先に達成した日時、最後にresultId。
     return db.prepare(`
       WITH best AS (
-        SELECT id, player_id, display_name, score, verified_at,
+        SELECT id, player_id, display_name, score, verified_at, oil_id, oil_amount_id, water_step, stop_step,
                ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY score DESC, verified_at ASC, id ASC) AS rn
         FROM results
-        WHERE scoring_version = ? AND egg_id = ? AND target_id = ?
+        WHERE scoring_version = ? AND egg_id = ? AND target_id = ? AND edge_id = ?
           AND published_at IS NOT NULL AND hidden_at IS NULL
           ${weekStart === null ? '' : 'AND week_start = ?'}
       )
-      SELECT id, player_id, display_name, score, verified_at,
+      SELECT id, player_id, display_name, score, verified_at, oil_id, oil_amount_id, water_step, stop_step,
              RANK() OVER (ORDER BY score DESC) AS rank,
              COUNT(*) OVER () AS total
       FROM best WHERE rn = 1
       ORDER BY score DESC, verified_at ASC, id ASC
-    `).all(...(weekStart === null ? [version, egg, target] : [version, egg, target, weekStart])) as {
+    `).all(...(weekStart === null ? [version, egg, target, edge] : [version, egg, target, edge, weekStart])) as {
       id: string;
       player_id: string;
       display_name: string;
       score: number;
       verified_at: number;
+      oil_id: string;
+      oil_amount_id: string;
+      water_step: number | null;
+      stop_step: number;
       rank: number;
       total: number;
     }[];
   }
 
-  function rankOf(playerId: string, version: string, egg: string, target: string, weekStart: number | null): RankInfo | null {
-    const rows = rankedQuery(version, egg, target, weekStart);
+  function rankOf(playerId: string, version: string, egg: string, target: string, edge: string, weekStart: number | null): RankInfo | null {
+    const rows = rankedQuery(version, egg, target, edge, weekStart);
     const me = rows.find((r) => r.player_id === playerId);
     return me ? { rank: me.rank, score: me.score, total: me.total } : null;
   }
@@ -288,7 +321,9 @@ export function createApp(opts: AppOptions) {
     rate(req, 'runs');
     const playerId = playerIdFor(req, true);
     const body = await readJson(req);
-    if (!isEggId(body.eggId) || !isTargetId(body.targetId)) throw new HttpError(400, 'bad_request', '卵または仕上がりの指定が正しくありません。');
+    if (!isEggId(body.eggId) || !isTargetId(body.targetId) || !isEdgeId(body.edgeId) || !isOilId(body.oilId) || !isOilAmountId(body.oilAmountId)) {
+      throw new HttpError(400, 'bad_request', '卵・仕上がり・油の指定が正しくありません。');
+    }
     const t = now();
     const ticket: RunTicket = {
       runId: randomUUID(),
@@ -296,13 +331,28 @@ export function createApp(opts: AppOptions) {
       scoringVersion: GAME_CONFIG.scoringVersion,
       eggId: body.eggId,
       targetId: body.targetId,
+      edgeId: body.edgeId,
+      oilId: body.oilId,
+      oilAmountId: body.oilAmountId,
       startedAt: t,
       expiresAt: t + runTtlMs,
     };
     db.prepare(
-      `INSERT INTO runs (id, player_id, egg_id, target_id, seed, scoring_version, started_at, expires_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'issued')`,
-    ).run(ticket.runId, playerId, ticket.eggId, ticket.targetId, ticket.seed, ticket.scoringVersion, ticket.startedAt, ticket.expiresAt);
+      `INSERT INTO runs (id, player_id, egg_id, target_id, edge_id, oil_id, oil_amount_id, seed, scoring_version, started_at, expires_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued')`,
+    ).run(
+      ticket.runId,
+      playerId,
+      ticket.eggId,
+      ticket.targetId,
+      ticket.edgeId,
+      ticket.oilId,
+      ticket.oilAmountId,
+      ticket.seed,
+      ticket.scoringVersion,
+      ticket.startedAt,
+      ticket.expiresAt,
+    );
     send(res, 201, ticket);
   }
 
@@ -341,16 +391,23 @@ export function createApp(opts: AppOptions) {
       throw new HttpError(422, 'invalid_log:elapsed', '調理時間が実際の経過時間と合いません。');
     }
 
-    const egg = getEgg(run.egg_id as EggId);
+    // 卵・目標・油は run 発行時の値を使う（送信内容では変えられない）
+    const params = cookParams({ eggId: run.egg_id as EggId, oilId: run.oil_id as OilId, oilAmountId: run.oil_amount_id as OilAmountId });
     const target = getTarget(run.target_id as TargetId);
-    const state = replay(v.events, v.stopStep, egg.gameSpeed);
-    const breakdown = scoreCook(state, target.targetY);
+    const edge = getEdge(run.edge_id as EdgeId);
+    const state = replay(v.events, v.stopStep, params);
+    const breakdown = scoreCook(state, target.targetY, edge);
     const row: ResultRow = {
       id: randomUUID(),
       run_id: run.id,
       player_id: playerId,
       egg_id: run.egg_id,
       target_id: run.target_id,
+      edge_id: run.edge_id,
+      oil_id: run.oil_id,
+      oil_amount_id: run.oil_amount_id,
+      water_step: state.waterStep,
+      wet: state.wet,
       scoring_version: run.scoring_version,
       w: state.W,
       y: state.Y,
@@ -370,9 +427,30 @@ export function createApp(opts: AppOptions) {
       const upd = db.prepare("UPDATE runs SET status = 'finished', log_hash = ? WHERE id = ? AND status = 'issued'").run(logHash, run.id);
       if (Number(upd.changes) !== 1) throw new HttpError(409, 'run_already_finished', 'このプレイは既に記録済みです。');
       db.prepare(
-        `INSERT INTO results (id, run_id, player_id, egg_id, target_id, scoring_version, w, y, b, d, score, stop_step, verified_at, week_start)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(row.id, row.run_id, row.player_id, row.egg_id, row.target_id, row.scoring_version, row.w, row.y, row.b, row.d, row.score, row.stop_step, row.verified_at, row.week_start);
+        `INSERT INTO results (id, run_id, player_id, egg_id, target_id, edge_id, oil_id, oil_amount_id, water_step, wet,
+                              scoring_version, w, y, b, d, score, stop_step, verified_at, week_start)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        row.id,
+        row.run_id,
+        row.player_id,
+        row.egg_id,
+        row.target_id,
+        row.edge_id,
+        row.oil_id,
+        row.oil_amount_id,
+        row.water_step,
+        row.wet,
+        row.scoring_version,
+        row.w,
+        row.y,
+        row.b,
+        row.d,
+        row.score,
+        row.stop_step,
+        row.verified_at,
+        row.week_start,
+      );
       const ins = db.prepare('INSERT INTO events (run_id, seq, step, action, value, created_at) VALUES (?, ?, ?, ?, ?, ?)');
       for (const e of v.events) ins.run(run.id, e.seq, e.step, e.action, e.value, t);
     });
@@ -401,8 +479,8 @@ export function createApp(opts: AppOptions) {
     const updated = db.prepare('SELECT * FROM results WHERE id = ?').get(r.id) as unknown as ResultRow;
     const body2: PublishResponse = {
       result: toVerified(updated),
-      weekly: rankOf(playerId, r.scoring_version, r.egg_id, r.target_id, jstWeekStart(t)),
-      allTime: rankOf(playerId, r.scoring_version, r.egg_id, r.target_id, null),
+      weekly: rankOf(playerId, r.scoring_version, r.egg_id, r.target_id, r.edge_id, jstWeekStart(t)),
+      allTime: rankOf(playerId, r.scoring_version, r.egg_id, r.target_id, r.edge_id, null),
       fetchedAt: t,
     };
     send(res, 200, body2);
@@ -412,27 +490,35 @@ export function createApp(opts: AppOptions) {
     rate(req, 'leaderboard');
     const egg = url.searchParams.get('egg');
     const target = url.searchParams.get('target');
+    const edge = url.searchParams.get('edge');
     const period = (url.searchParams.get('period') ?? 'weekly') as Period;
     const version = url.searchParams.get('version') ?? GAME_CONFIG.scoringVersion;
-    if (!isEggId(egg) || !isTargetId(target) || (period !== 'weekly' && period !== 'all') || version.length > 20) {
+    if (!isEggId(egg) || !isTargetId(target) || !isEdgeId(edge) || (period !== 'weekly' && period !== 'all') || version.length > 20) {
       throw new HttpError(400, 'bad_request', '条件の指定が正しくありません。');
     }
     const playerId = playerIdFor(req, false);
     const t = now();
     const weekStart = period === 'weekly' ? jstWeekStart(t) : null;
-    const rows = rankedQuery(version, egg, target, weekStart);
+    const rows = rankedQuery(version, egg, target, edge, weekStart);
     const entries: LeaderboardEntry[] = rows.slice(0, 50).map((r) => ({
       rank: r.rank,
       displayName: r.display_name,
       score: r.score,
       verifiedAt: r.verified_at,
       isMe: playerId !== null && r.player_id === playerId,
+      technique: {
+        oilId: r.oil_id as OilId,
+        oilAmountId: r.oil_amount_id as OilAmountId,
+        waterAtSeconds: r.water_step === null ? null : Math.round((r.water_step / STEPS_PER_SECOND) * 10) / 10,
+        plateAtSeconds: Math.round((r.stop_step / STEPS_PER_SECOND) * 10) / 10,
+      },
     }));
     const me = playerId ? rows.find((r) => r.player_id === playerId) : undefined;
     const body: LeaderboardResponse = {
       scoringVersion: version,
       eggId: egg,
       targetId: target,
+      edgeId: edge,
       period,
       range: weekStart === null ? null : { start: weekStart, end: weekStart + WEEK_MS },
       entries,

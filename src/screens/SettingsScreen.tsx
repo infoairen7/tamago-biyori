@@ -1,7 +1,8 @@
 // 設定・遊び方
 import { useEffect, useState } from 'react';
 import type { PublicSettings } from '../sponsor.ts';
-import { clearLocalRecords, type Settings } from '../game/storage.ts';
+import { FEATURE_UNLOCK_AT, clearLocalRecords, unlocksFor, type Feature, type Settings } from '../game/storage.ts';
+import { FEATURE_LABEL } from './SelectScreen.tsx';
 import { audio } from '../game/audio.ts';
 import { AppHeader, Button, IconButton } from '../components/ui.tsx';
 
@@ -28,6 +29,8 @@ export function SettingsScreen({
   renderReason,
   publicSettings,
   rankingConfigured,
+  plays,
+  onResetRecords,
   storagePersistent,
   scoringVersion,
   onClose,
@@ -39,12 +42,15 @@ export function SettingsScreen({
   renderReason: string | null;
   publicSettings: PublicSettings;
   rankingConfigured: boolean;
+  plays: number;
+  onResetRecords: () => void;
   storagePersistent: boolean;
   scoringVersion: string;
   onClose: () => void;
   toast: (t: string) => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
+  const earned = unlocksFor(plays, false);
   useEffect(() => {
     document.getElementById('settings-title')?.focus({ preventScroll: true });
   }, []);
@@ -71,10 +77,25 @@ export function SettingsScreen({
             </li>
             <li>
               <b>「お皿にうつす」で採点</b>
-              <span>白身40点・黄身40点・焼き色20点。強い焦げや生の白身には上限があります。90秒たつと自動でお皿へ。</span>
+              <span>白身40点・黄身40点・縁の焼き目20点。強い焦げや生の白身には上限があります。90秒たつと自動でお皿へ。</span>
             </li>
           </ol>
-          <p className="tiny">キーボード：0〜3＝火力（切・弱・中・強）、L＝ふた、S＝お皿にうつす、P＝一時停止、Enter／Space＝卵を割る</p>
+          <h3 className="h4 howto-sub">焼くたびに増える、こだわり</h3>
+          <ul className="howto-tips">
+            <li>
+              <b>縁の焼き目</b>（{FEATURE_UNLOCK_AT.edge}皿目のあと）：しろく／ほんのり／カリッと。黄身の仕上がりと組み合わせて、9通りのひと皿に。
+            </li>
+            <li>
+              <b>油の量</b>（{FEATURE_UNLOCK_AT.oilAmount}皿目のあと）：たっぷりは揚げ焼きで縁がカリカリに。少なめは色づきにくいぶん、焦げつきやすい。
+            </li>
+            <li>
+              <b>差し水</b>（{FEATURE_UNLOCK_AT.water}皿目のあと）：調理中に1回だけ。ふたと合わせると蒸し焼きになり、黄身が早く固まって白い膜がかかります。蒸気があるうちは焼き色も焦げも進みません。白身が生のうちに差すと水っぽくなります。
+            </li>
+            <li>
+              <b>油の種類</b>（{FEATURE_UNLOCK_AT.oilType}皿目のあと）：サラダ油は扱いやすく、バターは弱火でも色づくけれど中火以上で焦げやすい。ごま油はその間。
+            </li>
+          </ul>
+          <p className="tiny">キーボード：0〜3＝火力（切・弱・中・強）、L＝ふた、W＝差し水、S＝お皿にうつす、P＝一時停止、Enter／Space＝卵を割る</p>
           <p className="tiny">これはゲーム用の簡易モデルです。実際の調理時間・温度・安全性の目安ではありません。</p>
         </section>
 
@@ -151,12 +172,28 @@ export function SettingsScreen({
           </label>
         </section>
 
+        <section aria-labelledby="kodawari-h">
+          <h2 id="kodawari-h" className="section-title">
+            こだわり
+          </h2>
+          <p className="tiny">
+            これまでに焼いた皿：{plays}皿。使えるもの：
+            {(Object.keys(FEATURE_UNLOCK_AT) as Feature[])
+              .map((f) => `${FEATURE_LABEL[f]}${earned[f] || settings.unlockAll ? '' : `（${FEATURE_UNLOCK_AT[f]}皿目のあと）`}`)
+              .join('・')}
+          </p>
+          <label className="setting check">
+            <input type="checkbox" checked={settings.unlockAll} onChange={(e) => onChange({ unlockAll: e.target.checked })} />
+            <span>こだわりをすべて使えるようにする（焼いた皿の数を待たない）</span>
+          </label>
+        </section>
+
         <section aria-labelledby="data-h">
           <h2 id="data-h" className="section-title">
             記録とプライバシー
           </h2>
           <p className="tiny">
-            自己ベストと設定はこの端末のブラウザにだけ保存します。{!storagePersistent && 'この端末には記録を保存できません（今回の結果は表示できます）。'}
+            自己ベスト・焼いた皿の数・設定は、この端末のブラウザにだけ保存します。{!storagePersistent && 'この端末には記録を保存できません（今回の結果は表示できます）。'}
           </p>
           <p className="tiny">ランキング：{rankingConfigured ? 'サーバーに接続する設定です。登録は任意で、表示名だけを公開します。' : 'このサイトではランキングサーバーが未設定です。'}</p>
           <p className="tiny">氏名・メールアドレス・位置情報は使いません。</p>
@@ -171,6 +208,7 @@ export function SettingsScreen({
                 className="btn-small"
                 onClick={() => {
                   clearLocalRecords();
+                  onResetRecords();
                   setConfirmClear(false);
                   toast('端末内の記録を消しました。');
                 }}

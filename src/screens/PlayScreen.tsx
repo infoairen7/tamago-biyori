@@ -6,8 +6,8 @@ import type { RunInfo } from '../appTypes.ts';
 import { PlaySession } from '../game/session.ts';
 import { audio } from '../game/audio.ts';
 import { track } from '../game/analytics.ts';
-import { HEAT_LABELS, HEAT_STATUS, panMood, whiteLabel, yolkLabel } from '../game/feedback.ts';
-import { isTutorialSeen, markTutorialSeen, type Settings } from '../game/storage.ts';
+import { HEAT_LABELS, HEAT_STATUS, edgeLabel, panMood, whiteLabel, yolkLabel } from '../game/feedback.ts';
+import { FEATURE_UNLOCK_AT, isTutorialSeen, markTutorialSeen, type Settings, type Unlocks } from '../game/storage.ts';
 import type { SceneHost } from '../render/SceneHost.ts';
 import type { RenderView } from '../render/types.ts';
 import { AppHeader, Button, Dialog, IconButton, Icon } from '../components/ui.tsx';
@@ -30,6 +30,8 @@ function isTypingTarget(t: EventTarget | null): boolean {
 
 export function PlayScreen({
   run,
+  unlocks,
+  plays,
   host,
   settings,
   reducedMotion,
@@ -41,6 +43,9 @@ export function PlayScreen({
   onQuit,
 }: {
   run: RunInfo;
+  unlocks: Unlocks;
+  /** これまでに焼いた皿の数（この1皿を含まない） */
+  plays: number;
   host: SceneHost;
   settings: Settings;
   reducedMotion: boolean;
@@ -52,7 +57,7 @@ export function PlayScreen({
   onQuit: () => void;
 }) {
   const sessionRef = useRef<PlaySession | null>(null);
-  if (!sessionRef.current) sessionRef.current = new PlaySession(run.selection.eggId, run.selection.targetId, run.seed, performance.now());
+  if (!sessionRef.current) sessionRef.current = new PlaySession(run.selection, run.seed, performance.now());
   const session = sessionRef.current;
   const shape = useMemo(() => makeEggShape(run.seed, session.egg.visualScale), [run.seed, session.egg.visualScale]);
   const sceneRef = useRef<HTMLDivElement>(null);
@@ -64,6 +69,8 @@ export function PlayScreen({
   const pendingPauseRef = useRef(false);
   const cookStartRef = useRef<number | null>(null);
   const tutorial = useRef(settings.hints && !isTutorialSeen());
+  // 差し水が使えるようになってから2皿は、差すタイミングの目安を出す
+  const waterTip = useRef(settings.hints && unlocks.water && !settings.unlockAll && plays < FEATURE_UNLOCK_AT.water + 2);
   const reducedRef = useRef(reducedMotion);
   reducedRef.current = reducedMotion;
   const onDoneRef = useRef(onDone);
@@ -130,7 +137,7 @@ export function PlayScreen({
       }
       if (session.phase === 'cooking' && !session.paused) {
         const c = session.cook;
-        audio.setSizzle(Math.min(1, 0.15 + c.T * 0.9) * (0.5 + 0.5 * Math.min(1, c.W * 2)), c.lidClosed);
+        audio.setSizzle(Math.min(1, 0.15 + c.T * 0.9) * (0.5 + 0.5 * Math.min(1, c.W * 2)), c.lidClosed, c.S);
       }
       const r = host.renderer;
       if (r && !host.isContextLost) {
@@ -139,6 +146,8 @@ export function PlayScreen({
           phaseTime: (now - session.phaseStartedAt) / 1000,
           time: now / 1000,
           egg: session.egg,
+          oil: session.oil,
+          amount: session.amount,
           shape,
           cook: session.cook,
           paused: session.paused,
@@ -247,6 +256,15 @@ export function PlayScreen({
     }
   };
 
+  const addWater = () => {
+    if (!unlocks.water) return;
+    if (session.addWater()) {
+      audio.play('water');
+      track('water_add', { atSeconds: Math.round(session.elapsedSeconds), lid: session.cook.lidClosed });
+      refresh();
+    }
+  };
+
   const plate = () => {
     if (session.plate(performance.now())) {
       audio.play('plate');
@@ -276,6 +294,9 @@ export function PlayScreen({
       } else if (k === 'l') {
         e.preventDefault();
         toggleLid();
+      } else if (k === 'w') {
+        e.preventDefault();
+        addWater();
       } else if (k === 's') {
         e.preventDefault();
         plate();
@@ -296,9 +317,14 @@ export function PlayScreen({
   const elapsed = session.elapsedSeconds;
   const sinceCook = cookStartRef.current !== null ? elapsed : 0;
   const eggTag = `${session.egg.name} · ${session.target.label}`;
+  const goal = unlocks.edge ? `${session.target.label} × ${session.edge.label}` : session.target.label;
+  const oilTag = `${session.oil.name}・${session.amount.name}`;
+  const steaming = cooking && cook.S > 0.05;
 
   // 観察ラベルの読み上げ（変化したときだけ）
-  const labels = cooking ? `白身：${whiteLabel(cook.W)}。黄身：${yolkLabel(cook.Y)}。${cook.D >= 0.08 ? '縁が焦げはじめています。' : ''}` : '';
+  const labels = cooking
+    ? `白身：${whiteLabel(cook.W)}。黄身：${yolkLabel(cook.Y)}。${unlocks.edge ? `縁：${edgeLabel(cook.B, cook.D)}。` : cook.D >= 0.08 ? '縁が焦げはじめています。' : ''}`
+    : '';
   useEffect(() => {
     if (labels && labels !== lastLabels.current) {
       lastLabels.current = labels;
@@ -316,6 +342,9 @@ export function PlayScreen({
     bottomHint = 'タップで、割る';
   } else if (cooking && !session.paused) {
     if (cook.D >= 0.08) bottomHint = '縁が焦げはじめています';
+    else if (steaming && cook.lidClosed) bottomHint = 'ふたの中で、蒸し焼き中';
+    else if (steaming && cook.S > 0.3) bottomHint = 'ふたをすると、蒸気がこもる';
+    else if (waterTip.current && !session.waterUsed && cook.W >= 0.5 && cook.W < 0.8) bottomHint = '今なら差し水＋ふたで、蒸し焼きに';
     else if (tutorial.current && sinceCook < 9) bottomHint = '白身の透明感がなくなるまで待とう';
     else if (tutorial.current && sinceCook < 18) bottomHint = 'ふたをすると黄身が進みやすい';
     else if (sinceCook < 8) bottomHint = '白身の変化を見てみよう';
@@ -369,7 +398,7 @@ export function PlayScreen({
               {fmt(elapsed)} <small>経過</small>
             </div>
           )}
-          {(cooking || finished) && <span className="pill target-pill">目標：{session.target.label}</span>}
+          {(cooking || finished) && <span className="pill target-pill">目標：{goal}</span>}
           {topHint && <span className="pill scene-hint scene-hint-top">{topHint}</span>}
           {bottomHint && (
             <span className={`pill scene-hint scene-hint-bottom ${cook.D >= 0.08 && cooking ? 'is-warn' : ''}`}>
@@ -404,10 +433,11 @@ export function PlayScreen({
                 <span className="eyebrow">ON THE PAN</span>
                 <h2 className="panel-mood">{finished ? 'いい香り。' : panMood(cook.W, cook.D)}</h2>
                 <span className="desktag">
-                  {session.egg.name} × {session.target.label}
+                  {session.egg.name} × {goal}
                 </span>
+                {(unlocks.oilType || unlocks.oilAmount) && <span className="desktag desktag-oil">{oilTag}</span>}
               </div>
-              <div className="status" aria-hidden="true">
+              <div className={`status ${unlocks.edge ? 'status-3' : ''}`} aria-hidden="true">
                 <span>
                   <small>白身</small>
                   <b>{whiteLabel(cook.W)}</b>
@@ -416,6 +446,12 @@ export function PlayScreen({
                   <small>黄身</small>
                   <b>{yolkLabel(cook.Y)}</b>
                 </span>
+                {unlocks.edge && (
+                  <span>
+                    <small>縁</small>
+                    <b className={cook.D >= 0.08 ? 'warn' : ''}>{edgeLabel(cook.B, cook.D)}</b>
+                  </span>
+                )}
               </div>
               <div className="controltitle">
                 <b id="heat-label">火かげん</b>
@@ -436,17 +472,40 @@ export function PlayScreen({
                   </button>
                 ))}
               </div>
-              <button type="button" className="lid-toggle" aria-pressed={cook.lidClosed} disabled={!cooking || session.paused} onClick={toggleLid}>
-                <Icon name="lid" />
-                <span>ふたをする</span>
-                <span className="lid-state">{cook.lidClosed ? '閉じている' : '開いている'}</span>
-                <span className="switch" aria-hidden="true" />
-              </button>
+              <div className={`tools ${unlocks.water ? 'tools-2' : ''}`}>
+                <button
+                  type="button"
+                  className="lid-toggle"
+                  aria-pressed={cook.lidClosed}
+                  aria-label={unlocks.water ? 'ふたをする（L）' : undefined}
+                  disabled={!cooking || session.paused}
+                  onClick={toggleLid}
+                >
+                  <Icon name="lid" />
+                  <span>{unlocks.water ? 'ふた' : 'ふたをする'}</span>
+                  <span className="lid-state">{cook.lidClosed ? '閉じている' : '開いている'}</span>
+                  <span className="switch" aria-hidden="true" />
+                </button>
+                {unlocks.water && (
+                  <button
+                    type="button"
+                    className={`water-btn ${steaming ? 'is-steaming' : ''}`}
+                    disabled={!cooking || session.paused || session.waterUsed}
+                    onClick={addWater}
+                    aria-label={session.waterUsed ? '差し水は使いました' : '水を差す（W）。1回だけ'}
+                  >
+                    <Icon name="water" />
+                    <span>{session.waterUsed ? '差し水済み' : '水を差す'}</span>
+                  </button>
+                )}
+              </div>
               <Button variant="yolk" className="plate-btn" disabled={!cooking || session.paused} onClick={plate}>
                 お皿にうつす
               </Button>
-              <p className="tiny center">火を切っても、余熱で少し進みます。</p>
-              <p className="keyboard desk-only">0〜3：火力　L：ふた　S：盛り付け　P：一時停止</p>
+              <p className="tiny center">{unlocks.water ? '差し水は1回だけ。ふたと合わせると蒸し焼きに。' : '火を切っても、余熱で少し進みます。'}</p>
+              <p className="keyboard desk-only">
+                0〜3：火力　L：ふた　{unlocks.water ? 'W：差し水　' : ''}S：盛り付け　P：一時停止
+              </p>
             </div>
           </div>
         </section>

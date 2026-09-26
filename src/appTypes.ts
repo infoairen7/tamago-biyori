@@ -1,15 +1,13 @@
-import type { EggConfig, EggId, TargetConfig, TargetId } from '../shared/config.ts';
+import type { EdgeTargetConfig, EggConfig, OilAmountConfig, OilConfig, Recipe, TargetConfig } from '../shared/config.ts';
 import type { EggShape } from '../shared/shape.ts';
 import type { PublishResponse, RunTicket, VerifiedResult } from '../shared/api-types.ts';
 import type { FinalResult } from './game/session.ts';
-import type { LocalBest } from './game/storage.ts';
+import type { Feature, LocalBest, Unlocks } from './game/storage.ts';
 
 export type ScreenName = 'title' | 'select' | 'play' | 'result' | 'ranking' | 'settings';
 
-export interface Selection {
-  eggId: EggId;
-  targetId: TargetId;
-}
+/** 焼く前に選んだ内容（卵・黄身・縁・油） */
+export type Selection = Recipe;
 
 export type LocalReason = 'not_configured' | 'offline';
 
@@ -19,6 +17,8 @@ export interface RunInfo {
   selection: Selection;
   ticket: RunTicket | null;
   localReason: LocalReason | null;
+  /** 焼き始めた時点で使えたこだわり */
+  unlocks: Unlocks;
 }
 
 export type OnlineState =
@@ -31,9 +31,14 @@ export interface GameResult {
   run: RunInfo;
   egg: EggConfig;
   target: TargetConfig;
+  edge: EdgeTargetConfig;
+  oil: OilConfig;
+  amount: OilAmountConfig;
   shape: EggShape;
   final: FinalResult;
   finishedAt: number;
   best: { isNewBest: boolean; previous: LocalBest | null };
   storagePersistent: boolean;
+  /** この1皿で新しく使えるようになったこだわり */
+  newlyUnlocked: Feature[];
 }

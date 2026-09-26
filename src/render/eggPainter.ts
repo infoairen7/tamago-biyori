@@ -1,6 +1,6 @@
 // 白身・黄身・殻の見た目を W/Y/B/D と seed から描く共通ペインター。
 // 3Dのテクスチャ、2Dの軽量表示、結果画像のすべてがこの関数で同じ見た目を作ります。
-import type { EggId } from '../../shared/config.ts';
+import type { EggId, OilId } from '../../shared/config.ts';
 import { rngFor } from '../../shared/rng.ts';
 import { maxWhiteRadius, whiteRadiusAt, type EggShape } from '../../shared/shape.ts';
 import { clamp01 } from '../../shared/model.ts';
@@ -35,9 +35,21 @@ export function makeValueNoise(seed: number, purpose: string, grid = 24): (x: nu
 
 const RAW_WHITE: RGB = [226, 224, 208];
 const COOKED_WHITE: RGB = [255, 252, 243];
-const GOLDEN: RGB = [228, 172, 82];
-const BROWN: RGB = [158, 94, 40];
 const BURNT: RGB = [48, 30, 18];
+
+/** 油ごとの焼き色（バターはこっくり、ごま油は琥珀色） */
+const EDGE_TONES: Record<OilId, { golden: RGB; brown: RGB }> = {
+  salad: { golden: [228, 172, 82], brown: [158, 94, 40] },
+  butter: { golden: [222, 160, 66], brown: [150, 88, 34] },
+  sesame: { golden: [206, 140, 60], brown: [128, 74, 30] },
+};
+
+/** 油だまりの色と量（見た目用） */
+export const OIL_LOOK: Record<OilId, { pool: RGB; bubble: RGB }> = {
+  salad: { pool: [217, 169, 79], bubble: [226, 180, 103] },
+  butter: { pool: [240, 205, 120], bubble: [251, 238, 196] },
+  sesame: { pool: [184, 122, 46], bubble: [205, 150, 80] },
+};
 
 /**
  * 白身の表面（上から見た図）。テクスチャ用canvasをW/B/Dに応じて塗り直します。
@@ -55,7 +67,8 @@ export class WhiteSurface {
   private readonly n2: Float32Array;
   private readonly n3: Float32Array;
   private readonly ring: Float32Array;
-  private last = { W: -1, B: -1, D: -1 };
+  private last = { W: -1, B: -1, D: -1, wet: -1 };
+  private tone: OilId = 'salad';
 
   constructor(shape: EggShape, size: number) {
     this.size = size;
@@ -107,11 +120,19 @@ export class WhiteSurface {
     }
   }
 
-  /** 値が十分に変わったときだけ塗り直します。塗り直したら true。 */
-  update(W: number, B: number, D: number, force = false): boolean {
+  /** 焼き色の色味を油に合わせます（次の update で塗り直し） */
+  setTone(oil: OilId): void {
+    if (oil === this.tone) return;
+    this.tone = oil;
+    this.last = { W: -1, B: -1, D: -1, wet: -1 };
+  }
+
+  /** 値が十分に変わったときだけ塗り直します。塗り直したら true。wet は早すぎる差し水による水っぽさ。 */
+  update(W: number, B: number, D: number, force = false, wet = 0): boolean {
     const l = this.last;
-    if (!force && Math.abs(W - l.W) + Math.abs(B - l.B) + Math.abs(D - l.D) < 0.006) return false;
-    this.last = { W, B, D };
+    if (!force && Math.abs(W - l.W) + Math.abs(B - l.B) + Math.abs(D - l.D) + Math.abs(wet - l.wet) < 0.006) return false;
+    this.last = { W, B, D, wet };
+    const { golden: GOLDEN, brown: BROWN } = EDGE_TONES[this.tone];
     const data = this.img.data;
     const n = this.size * this.size;
     const bandW = 0.08 + 0.16 * B + 0.22 * D;
@@ -132,8 +153,8 @@ export class WhiteSurface {
       const n2 = this.n2[i];
       const wl = clamp01((W - 0.26 * this.thick[i]) / 0.72 + 0.06 * (n1 - 0.5));
       const cook = smoothstep(0.03, 0.9, wl);
-      let alpha = 0.42 + 0.58 * cook;
-      const shade = (0.965 + 0.05 * n1) * (1 - 0.1 * this.ring[i] * cook);
+      let alpha = (0.42 + 0.58 * cook) * (1 - 0.22 * wet * (0.6 + 0.4 * n1));
+      const shade = (0.965 + 0.05 * n1) * (1 - 0.1 * this.ring[i] * cook) * (1 - 0.05 * wet);
       let r = lerp(RAW_WHITE[0], COOKED_WHITE[0], cook) * shade;
       let g = lerp(RAW_WHITE[1], COOKED_WHITE[1], cook) * shade;
       let b = lerp(RAW_WHITE[2], COOKED_WHITE[2], cook) * shade;
@@ -168,27 +189,29 @@ export class WhiteSurface {
   }
 }
 
-/** 黄身の見た目（色は sRGB） */
-export function yolkLook(Y: number): { color: RGB; highlight: RGB; edge: RGB; roughness: number; clearcoat: number; gloss: number } {
+/** 黄身の見た目（色は sRGB）。F は蒸し焼きでかかる白い膜 */
+export function yolkLook(Y: number, F = 0): { color: RGB; highlight: RGB; edge: RGB; roughness: number; clearcoat: number; gloss: number } {
   const t = smoothstep(0.05, 0.95, Y);
-  const color = mix([250, 138, 10], [242, 190, 84], t);
-  const highlight = mix([255, 222, 110], [252, 228, 165], t);
-  const edge = mix([226, 112, 4], [218, 158, 56], t);
+  const film = smoothstep(0.02, 0.9, F) * 0.62;
+  const FILM: RGB = [250, 222, 190];
+  const color = mix(mix([250, 138, 10], [242, 190, 84], t), FILM, film);
+  const highlight = mix(mix([255, 222, 110], [252, 228, 165], t), [255, 240, 222], film);
+  const edge = mix(mix([226, 112, 4], [218, 158, 56], t), [240, 200, 160], film * 0.7);
   return {
     color,
     highlight,
     edge,
-    roughness: lerp(0.16, 0.72, t),
-    clearcoat: lerp(1, 0.05, smoothstep(0.05, 0.8, Y)),
-    gloss: lerp(0.75, 0.1, smoothstep(0.05, 0.85, Y)),
+    roughness: lerp(lerp(0.16, 0.72, t), 0.62, film),
+    clearcoat: lerp(1, 0.05, smoothstep(0.05, 0.8, Y)) * (1 - film * 0.6),
+    gloss: lerp(0.75, 0.1, smoothstep(0.05, 0.85, Y)) * (1 - film * 0.7),
   };
 }
 
 export const rgbCss = (c: RGB, a = 1): string => `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a})`;
 
 /** 2Dで黄身を描く（上から見た楕円） */
-export function paintYolk2D(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, Y: number): void {
-  const look = yolkLook(Y);
+export function paintYolk2D(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: number, ry: number, Y: number, F = 0): void {
+  const look = yolkLook(Y, F);
   // 接地の影
   ctx.save();
   ctx.fillStyle = 'rgba(120,80,20,0.18)';

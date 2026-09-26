@@ -1,10 +1,10 @@
 // WebGL 2が使えない環境のための軽量2D描画。3Dと同じ GameModel（W/Y/B/D）と seed の形を読みます。
 // 点数・操作・画像保存の意味は3Dと同じです。
-import type { EggConfig } from '../../../shared/config.ts';
+import type { EggConfig, OilAmountId, OilConfig, OilId } from '../../../shared/config.ts';
 import type { FinalCook } from '../../../shared/model.ts';
 import type { EggShape } from '../../../shared/shape.ts';
 import { rngFor } from '../../../shared/rng.ts';
-import { WhiteSurface, paintShell, paintYolk2D, shellColors, smoothstep } from '../eggPainter.ts';
+import { OIL_LOOK, WhiteSurface, paintShell, paintYolk2D, rgbCss, shellColors, smoothstep } from '../eggPainter.ts';
 import type { QualityLevel, RenderView, SceneRenderer } from '../types.ts';
 import { DROP_MS, PLATING_MS } from '../../game/session.ts';
 
@@ -228,9 +228,32 @@ export class Canvas2DRenderer implements SceneRenderer {
     c.stroke();
   }
 
+  /** 油だまり（量で広さと濃さ、種類で色が変わる） */
+  private drawOilPool(p: ReturnType<Canvas2DRenderer['projection']>, shape: EggShape, oil: OilId, amount: OilAmountId, alpha: number) {
+    const c = this.ctx;
+    const look = OIL_LOOK[oil];
+    const amt = amount === 'more' ? { o: 0.42, r: 1.32 } : amount === 'less' ? { o: 0.14, r: 1.06 } : { o: 0.26, r: 1.17 };
+    const r = shape.whiteRadius * amt.r * p.k;
+    const cx = p.sx(0);
+    const cy = p.sy(0.01, 0);
+    c.save();
+    c.globalAlpha = alpha;
+    c.translate(cx, cy);
+    c.scale(1, SQUASH);
+    const g = c.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
+    g.addColorStop(0, rgbCss(look.pool, amt.o * 0.6));
+    g.addColorStop(0.85, rgbCss(look.pool, amt.o));
+    g.addColorStop(1, rgbCss(look.pool, 0));
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(0, 0, r, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+
   private drawEggContents(
     p: ReturnType<Canvas2DRenderer['projection']>,
-    view: { shape: EggShape; W: number; Y: number; B: number; D: number; T: number; time: number; reducedMotion: boolean },
+    view: { shape: EggShape; W: number; Y: number; B: number; D: number; T: number; S?: number; F?: number; wet?: number; oil?: OilId; time: number; reducedMotion: boolean },
     ox: number,
     oy: number,
     oz: number,
@@ -239,7 +262,8 @@ export class Canvas2DRenderer implements SceneRenderer {
   ) {
     const c = this.ctx;
     const surface = this.ensureSurface(view.shape);
-    surface.update(view.W, view.B, view.D);
+    if (view.oil) surface.setTone(view.oil);
+    surface.update(view.W, view.B, view.D, false, view.wet ?? 0);
     const { k } = p;
     const ex = surface.extent * spread;
     const cx = p.sx(ox);
@@ -251,8 +275,8 @@ export class Canvas2DRenderer implements SceneRenderer {
     c.drawImage(surface.canvas, -ex * k, -ex * k, ex * 2 * k, ex * 2 * k);
     c.restore();
     // 泡
-    if (!view.reducedMotion && view.T > 0.42 && alpha > 0.9) {
-      const act = smoothstep(0.42, 0.7, view.T);
+    if (!view.reducedMotion && (view.T > 0.42 || (view.S ?? 0) > 0.05) && alpha > 0.9) {
+      const act = Math.max(smoothstep(0.42, 0.7, view.T), (view.S ?? 0) * 1.1);
       c.save();
       for (const b of view.shape.bubbles) {
         const ph = (view.time * (0.8 + b.size) + b.phase) % 1;
@@ -278,7 +302,7 @@ export class Canvas2DRenderer implements SceneRenderer {
     const yy = p.sy(oy + yr * 0.45, oz + view.shape.yolkZ * spread);
     c.save();
     c.globalAlpha = alpha;
-    paintYolk2D(c, yx, yy, yr * k, yr * k * (SQUASH * 0.92 + 0.08), view.Y);
+    paintYolk2D(c, yx, yy, yr * k, yr * k * (SQUASH * 0.92 + 0.08), view.Y, view.F ?? 0);
     c.restore();
   }
 
@@ -406,7 +430,21 @@ export class Canvas2DRenderer implements SceneRenderer {
     this.drawPan(p);
 
     // 卵の中身
-    const common = { shape: view.shape, W: cook.W, Y: cook.Y, B: cook.B, D: cook.D, T: cook.T, time: view.time, reducedMotion: view.reducedMotion };
+    const common = {
+      shape: view.shape,
+      W: cook.W,
+      Y: cook.Y,
+      B: cook.B,
+      D: cook.D,
+      T: cook.T,
+      S: cook.S,
+      F: cook.F,
+      wet: cook.wet,
+      oil: view.oil.id,
+      time: view.time,
+      reducedMotion: view.reducedMotion,
+    };
+    this.drawOilPool(p, view.shape, view.oil.id, view.amount.id, phase === 'plating' || phase === 'done' ? 1 : 0.95);
     const eggY = 9;
     if (phase === 'cooking' || phase === 'plating' || phase === 'done') {
       const e = easeInOut(plateT);
@@ -450,13 +488,13 @@ export class Canvas2DRenderer implements SceneRenderer {
     // ふた
     const lidTarget = cook.lidClosed && (phase === 'cooking' || phase === 'plating') && plateT === 0 ? 1 : 0;
     this.lidAnim = view.reducedMotion ? lidTarget : lidTarget > this.lidAnim ? Math.min(1, this.lidAnim + dt / 0.3) : Math.max(0, this.lidAnim - dt / 0.3);
-    const steamAmount = phase === 'cooking' && !view.paused ? smoothstep(0.35, 0.75, cook.T) * (0.35 + 0.65 * Math.min(1, cook.W * 1.4)) : 0;
+    const steamAmount = phase === 'cooking' && !view.paused ? smoothstep(0.35, 0.75, cook.T) * (0.35 + 0.65 * Math.min(1, cook.W * 1.4)) + cook.S * 1.1 : 0;
     this.drawSteam(p, view.time, steamAmount, cook.lidClosed, view.reducedMotion);
-    this.drawLid(p, this.lidAnim, cook.lidClosed ? smoothstep(0.3, 1, cook.T) * 0.6 : 0);
+    this.drawLid(p, this.lidAnim, cook.lidClosed ? Math.min(0.8, smoothstep(0.3, 1, cook.T) * 0.6 + cook.S * 0.3) : 0);
   }
 
-  snapshotPlate(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number): HTMLCanvasElement {
-    return drawPlateSnapshot2D(cook, egg, shape, width, height);
+  snapshotPlate(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number, oil?: OilConfig): HTMLCanvasElement {
+    return drawPlateSnapshot2D(cook, egg, shape, width, height, oil);
   }
 
   dispose(): void {
@@ -466,7 +504,7 @@ export class Canvas2DRenderer implements SceneRenderer {
 }
 
 /** 皿に盛った目玉焼き（2D）。3Dが使えない場合の結果画像にも使います。 */
-export function drawPlateSnapshot2D(cook: FinalCook, _egg: EggConfig, shape: EggShape, width: number, height: number): HTMLCanvasElement {
+export function drawPlateSnapshot2D(cook: FinalCook, _egg: EggConfig, shape: EggShape, width: number, height: number, oil?: OilConfig): HTMLCanvasElement {
   const out = document.createElement('canvas');
   out.width = width;
   out.height = height;
@@ -522,7 +560,8 @@ export function drawPlateSnapshot2D(cook: FinalCook, _egg: EggConfig, shape: Egg
   c.stroke();
   // 目玉焼き
   const surface = new WhiteSurface(shape, 384);
-  surface.update(cook.W, cook.B, cook.D, true);
+  if (oil) surface.setTone(oil.id);
+  surface.update(cook.W, cook.B, cook.D, true, cook.wet ?? 0);
   const ex = surface.extent;
   const fit = Math.min(1, 7.6 / ex);
   c.save();
@@ -531,7 +570,7 @@ export function drawPlateSnapshot2D(cook: FinalCook, _egg: EggConfig, shape: Egg
   c.drawImage(surface.canvas, -ex * k * fit, -ex * k * fit, ex * 2 * k * fit, ex * 2 * k * fit);
   c.restore();
   const yr = shape.yolkRadius * k * fit;
-  paintYolk2D(c, cx + shape.yolkX * k * fit, cy + shape.yolkZ * k * fit * squash - yr * 0.35, yr, yr * (squash * 0.9 + 0.1), cook.Y);
+  paintYolk2D(c, cx + shape.yolkX * k * fit, cy + shape.yolkZ * k * fit * squash - yr * 0.35, yr, yr * (squash * 0.9 + 0.1), cook.Y, cook.F ?? 0);
   return out;
 }
 

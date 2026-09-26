@@ -17,7 +17,9 @@ type IconName =
   | 'copy'
   | 'image'
   | 'close'
-  | 'external';
+  | 'external'
+  | 'water'
+  | 'lock';
 
 const PATHS: Record<IconName, string> = {
   arrow: 'M5 12h14m-6-6 6 6-6 6',
@@ -36,6 +38,8 @@ const PATHS: Record<IconName, string> = {
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9h.01',
   close: 'M6 6l12 12M18 6 6 18',
   external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  water: 'M10 4c-3 4-5 7-5 10a5 5 0 0 0 10 0c0-3-2-6-5-10zM18 3c-1 1.5-2 2.7-2 3.8a2 2 0 0 0 4 0C20 5.7 19 4.5 18 3z',
+  lock: 'M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3',
 };
 
 export function Icon({ name, size = 22, className }: { name: IconName; size?: number; className?: string }) {

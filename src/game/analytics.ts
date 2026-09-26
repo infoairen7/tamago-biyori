@@ -11,7 +11,9 @@ export type AnalyticsEvent =
   | 'x_intent_open'
   | 'native_share_open'
   | 'leaderboard_publish'
-  | 'sponsor_click';
+  | 'sponsor_click'
+  | 'water_add'
+  | 'feature_unlock';
 
 const completedRuns = new Set<string>();
 

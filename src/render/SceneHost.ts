@@ -1,6 +1,6 @@
 // 描画の選択と管理。WebGL 2が使えれば3D、使えない・初期化失敗・重大な描画失敗では軽量2Dへ切り替えます。
 // レンダラーは画面をまたいで生かしておき（コンテキストを作り直さない）、調理画面に来たら貼り付けます。
-import type { EggConfig } from '../../shared/config.ts';
+import type { EggConfig, OilConfig } from '../../shared/config.ts';
 import type { FinalCook } from '../../shared/model.ts';
 import type { EggShape } from '../../shared/shape.ts';
 import { Canvas2DRenderer, drawPlateSnapshot2D } from './canvas2d/Canvas2DRenderer.ts';
@@ -183,14 +183,14 @@ export class SceneHost {
   }
 
   /** 皿の画像。3Dで失敗したら2Dで描きます（同じ状態から）。 */
-  snapshot(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number): HTMLCanvasElement {
+  snapshot(cook: FinalCook, egg: EggConfig, shape: EggShape, width: number, height: number, oil?: OilConfig): HTMLCanvasElement {
     const r = this.ensure();
     try {
-      if (!this.contextLost) return r.snapshotPlate(cook, egg, shape, width, height);
+      if (!this.contextLost) return r.snapshotPlate(cook, egg, shape, width, height, oil);
     } catch (e) {
       console.warn('[scene] snapshot failed, using 2D', e);
     }
-    return drawPlateSnapshot2D(cook, egg, shape, width, height);
+    return drawPlateSnapshot2D(cook, egg, shape, width, height, oil);
   }
 
   /** 検証用：コンテキストロストを発生させる（3Dのみ） */

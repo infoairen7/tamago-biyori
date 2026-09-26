@@ -16,7 +16,8 @@
     "simulate": "node scripts/simulate.ts",
     "server": "node --disable-warning=ExperimentalWarning server/index.ts",
     "start": "node --disable-warning=ExperimentalWarning scripts/start.ts",
-    "optimize-assets": "node scripts/optimize-assets.mjs"
+    "optimize-assets": "node scripts/optimize-assets.mjs",
+    "tune": "node scripts/tune-search.ts"
   },
   "dependencies": {
     "react": "~19.2.6",

@@ -1,13 +1,25 @@
 // 画面遷移とアプリ全体の状態。ゲームの計算は shared/ と game/session.ts にあり、ここは流れだけを扱います。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GAME_CONFIG, getEgg, getTarget } from '../shared/config.ts';
+import { GAME_CONFIG } from '../shared/config.ts';
 import { makeEggShape } from '../shared/shape.ts';
 import { randomSeed } from '../shared/rng.ts';
 import type { Period } from '../shared/api-types.ts';
 import type { GameResult, OnlineState, RunInfo, ScreenName, Selection } from './appTypes.ts';
 import { audio } from './game/audio.ts';
 import { track } from './game/analytics.ts';
-import { getLastSelection, loadSettings, recordLocalBest, saveLastSelection, saveSettings, store, type Settings } from './game/storage.ts';
+import {
+  applyUnlocks,
+  getLastSelection,
+  getPlays,
+  loadSettings,
+  recordLocalBest,
+  recordPlay,
+  saveLastSelection,
+  saveSettings,
+  store,
+  unlocksFor,
+  type Settings,
+} from './game/storage.ts';
 import type { PlaySession } from './game/session.ts';
 import { SceneHost } from './render/SceneHost.ts';
 import { ranking, RankingError } from './online/ranking.ts';
@@ -43,6 +55,8 @@ export function App() {
   const [screen, setScreen] = useState<ScreenName>('title');
   const [returnTo, setReturnTo] = useState<ScreenName>('title');
   const [selection, setSelection] = useState<Selection>(getLastSelection);
+  const [plays, setPlays] = useState<number>(getPlays);
+  const unlocks = useMemo(() => unlocksFor(plays, settings.unlockAll), [plays, settings.unlockAll]);
   const [run, setRun] = useState<RunInfo | null>(null);
   const [result, setResult] = useState<GameResult | null>(null);
   const [online, setOnline] = useState<OnlineState>({ kind: 'local', reason: 'not_configured' });
@@ -133,26 +147,28 @@ export function App() {
   };
 
   // 卵と目標を決めて、runを始める。サーバーがあれば短い待ち時間でrunを発行し、だめならローカル専用。
-  const startRun = async (sel: Selection) => {
+  const startRun = async (picked: Selection) => {
     audio.unlock();
-    setSelection(sel);
-    saveLastSelection(sel.eggId, sel.targetId);
-    track('egg_select', { eggId: sel.eggId, targetId: sel.targetId });
+    // まだ使えないこだわりは基本の値で焼く
+    const sel = applyUnlocks(picked, unlocks);
+    setSelection(picked);
+    saveLastSelection(picked);
+    track('egg_select', { eggId: sel.eggId, targetId: sel.targetId, edgeId: sel.edgeId, oilId: sel.oilId, oilAmountId: sel.oilAmountId });
     let info: RunInfo;
     if (ranking.configured) {
       setStarting(true);
       try {
-        const ticket = await ranking.createRun(sel.eggId, sel.targetId);
-        info = { key: ticket.runId, seed: ticket.seed >>> 0, selection: sel, ticket, localReason: null };
+        const ticket = await ranking.createRun(sel);
+        info = { key: ticket.runId, seed: ticket.seed >>> 0, selection: sel, ticket, localReason: null, unlocks };
       } catch {
         const seed = randomSeed();
-        info = { key: `local-${seed}-${Date.now()}`, seed, selection: sel, ticket: null, localReason: 'offline' };
+        info = { key: `local-${seed}-${Date.now()}`, seed, selection: sel, ticket: null, localReason: 'offline', unlocks };
       } finally {
         setStarting(false);
       }
     } else {
       const seed = randomSeed();
-      info = { key: `local-${seed}-${Date.now()}`, seed, selection: sel, ticket: null, localReason: 'not_configured' };
+      info = { key: `local-${seed}-${Date.now()}`, seed, selection: sel, ticket: null, localReason: 'not_configured', unlocks };
     }
     setRun(info);
     host.ensure();
@@ -182,19 +198,37 @@ export function App() {
     if (!run || !session.final) return;
     const final = session.final;
     const finishedAt = Date.now();
-    const best = recordLocalBest(session.eggId, session.targetId, final.breakdown.score, finishedAt);
+    const best = recordLocalBest(session.recipe, final.breakdown.score, finishedAt);
+    const progress = recordPlay(settings.unlockAll);
+    setPlays(progress.plays);
+    for (const f of progress.newlyUnlocked) track('feature_unlock', { feature: f, plays: progress.plays });
     const res: GameResult = {
       run,
-      egg: getEgg(session.eggId),
-      target: getTarget(session.targetId),
+      egg: session.egg,
+      target: session.target,
+      edge: session.edge,
+      oil: session.oil,
+      amount: session.amount,
       shape: makeEggShape(run.seed, session.egg.visualScale),
       final,
       finishedAt,
       best,
       storagePersistent: store.persistent,
+      newlyUnlocked: progress.newlyUnlocked,
     };
     setResult(res);
-    track('game_complete', { runKey: run.key, score: final.breakdown.score, eggId: session.eggId, targetId: session.targetId, reason: final.reason, render: host.mode ?? 'none' });
+    track('game_complete', {
+      runKey: run.key,
+      score: final.breakdown.score,
+      eggId: session.eggId,
+      targetId: session.targetId,
+      edgeId: session.edge.id,
+      oilId: session.oil.id,
+      oilAmountId: session.amount.id,
+      water: session.waterUsed,
+      reason: final.reason,
+      render: host.mode ?? 'none',
+    });
     if (run.ticket) void submitOnline(res);
     else setOnline({ kind: 'local', reason: run.localReason ?? 'offline' });
     go('result');
@@ -218,6 +252,8 @@ export function App() {
         return (
           <SelectScreen
             initial={selection}
+            unlocks={unlocks}
+            plays={plays}
             sponsor={sponsorState.sponsor}
             starting={starting}
             muted={settings.muted}
@@ -231,6 +267,8 @@ export function App() {
           <PlayScreen
             key={run.key}
             run={run}
+            unlocks={run.unlocks}
+            plays={plays}
             host={host}
             settings={settings}
             reducedMotion={reducedMotion}
@@ -264,7 +302,7 @@ export function App() {
             }}
             onRetryFinish={() => void submitOnline(result)}
             onPublished={(p) => setOnline((o) => (o.kind === 'verified' ? { ...o, published: p } : o))}
-            onRanking={() => openRanking('result', { eggId: result.egg.id, targetId: result.target.id })}
+            onRanking={() => openRanking('result', result.run.selection)}
             onSettings={() => openSettings('result')}
             onTitle={() => go('title')}
           />
@@ -275,7 +313,7 @@ export function App() {
             initial={rankingQuery}
             onBack={() => go(returnTo === 'result' && result ? 'result' : 'title')}
             onPlay={(sel) => {
-              setSelection(sel);
+              setSelection((prev) => ({ ...prev, ...sel }));
               go('select');
             }}
           />
@@ -289,6 +327,8 @@ export function App() {
             renderReason={renderInfo.reason}
             publicSettings={sponsorState.settings}
             rankingConfigured={ranking.configured}
+            plays={plays}
+            onResetRecords={() => setPlays(0)}
             storagePersistent={store.persistent}
             scoringVersion={GAME_CONFIG.scoringVersion}
             onClose={() => go(returnTo === 'result' && result ? 'result' : 'title')}

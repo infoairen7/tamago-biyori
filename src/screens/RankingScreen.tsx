@@ -1,8 +1,8 @@
 // 公開ランキング。サーバー未接続のときは架空の参加者で埋めず「ランキングに接続できません」と表示します。
 import { useCallback, useEffect, useState } from 'react';
-import { GAME_CONFIG, type EggId, type TargetId } from '../../shared/config.ts';
+import { GAME_CONFIG, getOil, getOilAmount, type EdgeId, type EggId, type TargetId } from '../../shared/config.ts';
 import { formatJstDateTime, formatJstRange } from '../../shared/period.ts';
-import type { LeaderboardResponse, Period } from '../../shared/api-types.ts';
+import type { LeaderboardResponse, Period, Technique } from '../../shared/api-types.ts';
 import type { Selection } from '../appTypes.ts';
 import { ranking, RankingError } from '../online/ranking.ts';
 import { getLocalBest } from '../game/storage.ts';
@@ -10,25 +10,42 @@ import { AppHeader, Button, EmptyState, Icon, IconButton } from '../components/u
 
 type LoadState = { kind: 'loading' } | { kind: 'ok'; data: LeaderboardResponse } | { kind: 'error'; message: string; notConfigured: boolean };
 
-export function RankingScreen({ initial, onBack, onPlay }: { initial: { selection: Selection; period: Period }; onBack: () => void; onPlay: (s: Selection) => void }) {
+function techniqueText(t: Technique): string {
+  const parts = [`${getOil(t.oilId).name}・${getOilAmount(t.oilAmountId).name}`];
+  if (t.waterAtSeconds !== null) parts.push(`差し水 ${t.waterAtSeconds}秒`);
+  parts.push(`お皿へ ${t.plateAtSeconds}秒`);
+  return parts.join('／');
+}
+
+export function RankingScreen({
+  initial,
+  onBack,
+  onPlay,
+}: {
+  initial: { selection: Selection; period: Period };
+  onBack: () => void;
+  onPlay: (s: Pick<Selection, 'eggId' | 'targetId' | 'edgeId'>) => void;
+}) {
   const [eggId, setEggId] = useState<EggId>(initial.selection.eggId);
   const [targetId, setTargetId] = useState<TargetId>(initial.selection.targetId);
+  const [edgeId, setEdgeId] = useState<EdgeId>(initial.selection.edgeId);
   const [period, setPeriod] = useState<Period>(initial.period);
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const egg = GAME_CONFIG.eggs.find((e) => e.id === eggId)!;
   const target = GAME_CONFIG.targets.find((t) => t.id === targetId)!;
-  const localBest = getLocalBest(eggId, targetId);
+  const edge = GAME_CONFIG.edgeTargets.find((t) => t.id === edgeId)!;
+  const localBest = getLocalBest({ eggId, targetId, edgeId });
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' });
     try {
-      const data = await ranking.leaderboard(eggId, targetId, period, GAME_CONFIG.scoringVersion);
+      const data = await ranking.leaderboard(eggId, targetId, edgeId, period, GAME_CONFIG.scoringVersion);
       setState({ kind: 'ok', data });
     } catch (e) {
       const err = e instanceof RankingError ? e : null;
       setState({ kind: 'error', message: err?.message ?? 'ランキングに接続できません。', notConfigured: err?.code === 'not_configured' });
     }
-  }, [eggId, targetId, period]);
+  }, [eggId, targetId, edgeId, period]);
 
   useEffect(() => {
     void load();
@@ -47,7 +64,7 @@ export function RankingScreen({ initial, onBack, onPlay }: { initial: { selectio
       <div className="rank-body">
         <span className="eyebrow">A GOOD EGG, A GREAT SCORE.</span>
         <h2 className="screen-heading">{period === 'weekly' ? '今週の、いいひと皿。' : 'これまでの、いいひと皿。'}</h2>
-        <p className="muted intro">同じ卵・仕上がりで腕くらべ。</p>
+        <p className="muted intro">同じ卵・仕上がりで腕くらべ。上位の人の油や差し水も見てみよう。</p>
         <fieldset className="segments two-items">
           <legend className="sr-only">期間</legend>
           {(
@@ -74,7 +91,7 @@ export function RankingScreen({ initial, onBack, onPlay }: { initial: { selectio
             </select>
           </label>
           <label>
-            <span className="sr-only">仕上がり</span>
+            <span className="sr-only">黄身の仕上がり</span>
             <select value={targetId} onChange={(e) => setTargetId(e.target.value as TargetId)}>
               {GAME_CONFIG.targets.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -83,9 +100,19 @@ export function RankingScreen({ initial, onBack, onPlay }: { initial: { selectio
               ))}
             </select>
           </label>
+          <label>
+            <span className="sr-only">縁の焼き目</span>
+            <select value={edgeId} onChange={(e) => setEdgeId(e.target.value as EdgeId)}>
+              {GAME_CONFIG.edgeTargets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  縁{t.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <p className="tiny period">
-          {period === 'weekly' ? '週間' : '全期間'}・{egg.name}・{target.label}
+          {period === 'weekly' ? '週間' : '全期間'}・{egg.name}・{target.label}・縁{edge.label}
           {rangeText && ` ｜ ${rangeText}`}
         </p>
 
@@ -116,7 +143,10 @@ export function RankingScreen({ initial, onBack, onPlay }: { initial: { selectio
                   <span className="avatar" aria-hidden="true">
                     <Icon name="drop" size={16} />
                   </span>
-                  <b className="rankname">{e.displayName}</b>
+                  <span className="rankname-wrap">
+                    <b className="rankname">{e.displayName}</b>
+                    {e.technique && <span className="rank-technique">{techniqueText(e.technique)}</span>}
+                  </span>
                   {e.isMe && <span className="me-tag">あなた</span>}
                   <strong>
                     {e.score}
@@ -149,7 +179,7 @@ export function RankingScreen({ initial, onBack, onPlay }: { initial: { selectio
         )}
       </div>
       <div className="sticky-footer">
-        <Button onClick={() => onPlay({ eggId, targetId })}>
+        <Button onClick={() => onPlay({ eggId, targetId, edgeId })}>
           もうひと皿、焼いてみる <Icon name="arrow" />
         </Button>
       </div>
