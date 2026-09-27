@@ -12,6 +12,8 @@
 
 > このゲームの加熱モデルはゲーム用の簡易モデルです。実際の調理時間・温度・安全性の目安ではありません。
 
+**遊ぶ：https://infoairen7.github.io/tamago-biyori/** （GitHub Pages。ランキングは未接続のローカル版）
+
 制作資料（仕様書・画面デザイン）は [`docs/design/`](docs/design/) にあります。検証結果は [`docs/VERIFICATION.md`](docs/VERIFICATION.md) を参照してください。
 
 ---

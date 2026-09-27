@@ -16,6 +16,13 @@
 GitHub への登録前に同じ環境で再実行：型チェック（アプリ・サーバー）成功、`npm test` 38件成功、`npm run simulate` で全9条件90点以上、オンライン構成での通しプレイ（白い卵・とろり、中火でゲーム内27秒 → 99点、サーバー再計算・名前登録・週間1位表示）、幅320pxで横スクロールなし・「お皿にうつす」56pxが画面内、コンソールエラーなし。
 ※検証環境はソフトウェア描画で極端に遅く（約2〜4fps）、1フレームの取り込み上限0.25秒によりゲーム内時間が実時間よりゆっくり進みました。点数はゲーム内時間で決まるため結果は変わりません。
 
+## GitHub 公開時の確認（2026-09-27 09:25）
+
+- リポジトリ：https://github.com/infoairen7/tamago-biyori （公開）
+- 公開URL：https://infoairen7.github.io/tamago-biyori/ （GitHub Pages、ランキングは未接続のローカル版）
+- GitHub Actions の CI（ubuntu-latest・Node 22）ですべて成功：`npm install`、型チェック、`npm test`、`npm run simulate`、**Vite による本番ビルド**（ローカル版・同一オリジンのランキング版の2通り）。生成された `package-lock.json` を CI がコミット。固定された主な版：Vite 8.3.1、@vitejs/plugin-react 6.1.1、React 19.2.8、Three.js 0.186.1、@types/three 0.186.0、TypeScript 6.0.3
+- Pages のデプロイ成功後、公開URLを macOS の Chrome（実機・GPU描画）で開き、タイトル → 卵選択 → 卵を割る画面の3D表示まで確認
+
 ## 採点バージョン2.0.0（油・差し水・縁の焼き目）の確認（2026-09-27 06:10）
 
 実行して確認：
@@ -106,4 +113,3 @@ GitHub への登録前に同じ環境で再実行：型チェック（アプリ�
 | 実際のX投稿画面での文面・改行の引き継ぎ | 検証環境からは x.com に接続できないためURLの内容のみ確認 |
 | OSの共有画面（Web Share）での画像共有 | |
 | 公開ランキングの本番運用（サーバー・永続ディスク・HTTPS） | 接続先が未定 |
-| Vite による本番ビルド | GitHub Actions の `ci.yml` で実行して確認 |
